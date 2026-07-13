@@ -1,9 +1,11 @@
 import React, { useRef, useState } from 'react';
 import { useStore, exportData, makeDemoHistory } from '../store.jsx';
+import { useDevMode } from '../devmode.jsx';
 import PhoneSync from './PhoneSync.jsx';
 
 export default function SettingsTab() {
   const { state, dispatch } = useStore();
+  const { isDev, override, setOverride } = useDevMode();
   const fileRef = useRef(null);
   const [showSync, setShowSync] = useState(false);
 
@@ -72,14 +74,8 @@ export default function SettingsTab() {
       {showSync && <PhoneSync onClose={() => setShowSync(false)} />}
 
       <section className="card settings-section">
-        <h2>Developer</h2>
+        <h2>Data</h2>
         <div className="row gap wrap">
-          <button
-            className="btn"
-            onClick={() => dispatch({ type: 'demoHistory', sessions: makeDemoHistory(state.workouts) })}
-          >
-            Load demo history
-          </button>
           <button
             className="btn danger-ghost"
             onClick={() => confirm('Reset ALL app data? This cannot be undone.') && dispatch({ type: 'reset' })}
@@ -87,11 +83,51 @@ export default function SettingsTab() {
             Reset all data
           </button>
         </div>
-        <div className="muted tiny" style={{ marginTop: 6 }}>
-          Demo history fills ~6 weeks of fake sessions so PRs, totals and popularity have data.
-          {' '}Sessions logged: {state.history.length}
-        </div>
       </section>
+
+      {isDev && (
+        <section className="card settings-section">
+          <h2>Developer (preview build)</h2>
+          <div className="muted small">
+            Only visible while running the dev server — hidden in the deployed app.
+          </div>
+
+          <div className="muted tiny" style={{ marginTop: 12, marginBottom: 4 }}>Layout preview</div>
+          <div className="seg-row">
+            <button
+              className={`seg ${!override ? 'seg-active' : ''}`}
+              onClick={() => setOverride(null)}
+            >
+              Auto (screen)
+            </button>
+            <button
+              className={`seg ${override === 'phone' ? 'seg-active' : ''}`}
+              onClick={() => setOverride('phone')}
+            >
+              Phone
+            </button>
+            <button
+              className={`seg ${override === 'laptop' ? 'seg-active' : ''}`}
+              onClick={() => setOverride('laptop')}
+            >
+              Laptop
+            </button>
+          </div>
+
+          <div className="row gap wrap" style={{ marginTop: 14 }}>
+            <button
+              className="btn"
+              onClick={() => dispatch({ type: 'demoHistory', sessions: makeDemoHistory(state.workouts) })}
+            >
+              Load demo history
+            </button>
+          </div>
+          <div className="muted tiny" style={{ marginTop: 6 }}>
+            Demo history fills ~6 weeks of fake sessions so PRs, totals and popularity have data.
+            {' '}Sessions logged: {state.history.length}
+          </div>
+        </section>
+      )}
     </div>
   );
 }

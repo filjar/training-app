@@ -1,103 +1,188 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 
-const NEUTRAL = new THREE.Color(0x99a0ad);
-const MUSCLE_BASE = new THREE.Color(0xb2b8c4);
+const NEUTRAL = new THREE.Color(0x9aa1ad);
 const SELECTED = new THREE.Color(0xe0452f);
-const HL_LIGHT = new THREE.Color(0xf3b0a4);
-const HL_DARK = new THREE.Color(0x8a1a08);
+const HL_LIGHT = new THREE.Color(0xf0a596);
+const HL_DARK = new THREE.Color(0x8f1c0a);
+const BORDER_IDLE = new THREE.Color(0x7f8aa2); // faint outline of an unselected muscle area
 
 function coreMat() {
-  return new THREE.MeshStandardMaterial({ color: NEUTRAL, roughness: 0.75, metalness: 0.05 });
-}
-function muscleMat() {
-  return new THREE.MeshStandardMaterial({ color: MUSCLE_BASE, roughness: 0.6, metalness: 0.05 });
+  return new THREE.MeshStandardMaterial({ color: NEUTRAL, roughness: 0.8, metalness: 0.04 });
 }
 
 function sphere(sx, sy, sz, x, y, z, mat) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 18), mat);
+  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), mat);
   m.scale.set(sx, sy, sz);
   m.position.set(x, y, z);
   return m;
 }
-function cyl(rTop, rBot, h, x, y, z, mat) {
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(rTop, rBot, h, 18), mat);
+// Capsule (rounded cylinder) — a limb segment. Oriented along Y.
+function capsule(r, len, x, y, z, mat) {
+  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 8, 20), mat);
   m.position.set(x, y, z);
   return m;
 }
 
-// Builds the mannequin. Returns { group, muscleMeshes: {muscleName: [mesh,...]} }
+// ---- muscle-area overlays -------------------------------------------------
+// Each muscle is a thin "sticker" laid on the body surface: a rounded patch
+// that is invisible when idle (only its outline shows, to aid tapping) and
+// fills with red when selected or shaded by workout load. This keeps the body
+// mesh itself a plain visual, so any realistic base model can sit underneath.
+
+function roundedRectShape(w, h, r) {
+  const s = new THREE.Shape();
+  const x = -w / 2, y = -h / 2;
+  r = Math.min(r, w / 2, h / 2);
+  s.moveTo(x + r, y);
+  s.lineTo(x + w - r, y);
+  s.quadraticCurveTo(x + w, y, x + w, y + r);
+  s.lineTo(x + w, y + h - r);
+  s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  s.lineTo(x + r, y + h);
+  s.quadraticCurveTo(x, y + h, x, y + h - r);
+  s.lineTo(x, y + r);
+  s.quadraticCurveTo(x, y, x + r, y);
+  return s;
+}
+
+// Gentle outward bulge so a patch hugs a rounded surface instead of floating flat.
+function bulgeZ(x, y, w, h, curve) {
+  const nx = x / (w / 2), ny = y / (h / 2);
+  return curve * Math.max(0, 1 - nx * nx) * Math.max(0, 1 - ny * ny);
+}
+
+function makeArea(w, h, curve) {
+  const shape = roundedRectShape(w, h, Math.min(w, h) * 0.42);
+
+  const fillGeo = new THREE.ShapeGeometry(shape, 18);
+  const pos = fillGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setZ(i, bulgeZ(pos.getX(i), pos.getY(i), w, h, curve));
+  }
+  pos.needsUpdate = true;
+  fillGeo.computeVertexNormals();
+  const fill = new THREE.Mesh(
+    fillGeo,
+    new THREE.MeshBasicMaterial({
+      color: SELECTED.clone(),
+      transparent: true,
+      opacity: 0,
+      // Front-face only: a patch is tappable only when its muscle actually
+      // faces the camera, so a click can't pass through the torso and grab a
+      // muscle on the far side.
+      side: THREE.FrontSide,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -6,
+      polygonOffsetUnits: -6,
+    }),
+  );
+  fill.renderOrder = 2;
+
+  const outline = shape
+    .getPoints(56)
+    .map((p) => new THREE.Vector3(p.x, p.y, bulgeZ(p.x, p.y, w, h, curve)));
+  const border = new THREE.LineLoop(
+    new THREE.BufferGeometry().setFromPoints(outline),
+    new THREE.LineBasicMaterial({ color: BORDER_IDLE.clone(), transparent: true, opacity: 0.7 }),
+  );
+  border.renderOrder = 3;
+
+  const group = new THREE.Group();
+  group.add(fill, border);
+  fill.userData.border = border;
+  return { group, fill };
+}
+
+const UP_Z = new THREE.Vector3(0, 0, 1);
+
+// Places a muscle area centred at (x,y,z) on the surface, facing `face`.
+function placeArea(muscles, name, parent, x, y, z, face, w, h, curve = 0.02) {
+  const { group, fill } = makeArea(w, h, curve);
+  const f = new THREE.Vector3(...face).normalize();
+  group.quaternion.setFromUnitVectors(UP_Z, f);
+  group.position.set(x, y, z);
+  fill.userData.muscle = name;
+  (muscles[name] ??= []).push(fill);
+  parent.add(group);
+}
+
+// Builds the body: a plain neutral base mesh plus the selectable muscle areas.
+// Returns { group, muscles: { name: [fillMesh,...] } }.
 function buildBody(bodyType) {
   const isMan = bodyType === 'man';
-  const sw = isMan ? 0.21 : 0.17; // shoulder half-width
-  const hw = isMan ? 0.11 : 0.135; // hip half-width
-  const ms = isMan ? 1.12 : 1.0; // muscle bulk
+  const sw = isMan ? 0.205 : 0.165; // shoulder half-width
+  const hipR = isMan ? 0.125 : 0.142;
+  const waistR = isMan ? 0.107 : 0.097;
+  const chestR = isMan ? 0.152 : 0.126;
+  const zf = 0.82; // torso front/back flattening
 
   const group = new THREE.Group();
   const muscles = {};
-  const addMuscle = (name, mesh, parent = group) => {
-    mesh.userData.muscle = name;
-    mesh.scale.multiplyScalar(ms);
-    (muscles[name] ??= []).push(mesh);
-    parent.add(mesh);
-  };
-
-  // --- core / neutral body ---
   const core = coreMat();
-  group.add(sphere(hw, 0.1, 0.09, 0, 0, 0, core)); // pelvis
-  group.add(cyl(0.105, hw * 0.9, 0.22, 0, 0.16, 0, core)); // waist
-  group.add(sphere(sw * 0.82, 0.17, 0.11, 0, 0.38, 0, core)); // ribcage
-  group.add(cyl(0.034, 0.042, 0.12, 0, 0.545, 0, core)); // neck
-  const head = sphere(0.085, 0.1, 0.09, 0, 0.7, 0, core);
-  group.add(head);
-  // shoulder bridge
-  group.add(cyl(0.045, 0.045, sw * 2, 0, 0.5, 0, core).rotateZ(Math.PI / 2));
 
-  // --- torso muscles ---
-  for (const side of [-1, 1]) {
-    addMuscle('Chest', sphere(0.062, 0.052, 0.05, side * 0.06, 0.42, 0.075, muscleMat()));
-    addMuscle('Obliques', sphere(0.032, 0.09, 0.05, side * 0.1, 0.2, 0.03, muscleMat()));
-    addMuscle('Traps', sphere(0.055, 0.038, 0.05, side * 0.06, 0.53, -0.015, muscleMat()));
-    addMuscle('Lats', sphere(0.055, 0.095, 0.042, side * 0.08, 0.31, -0.06, muscleMat()));
-    addMuscle('Glutes', sphere(0.07, 0.07, 0.06, side * 0.06, -0.02, -0.06, muscleMat()));
+  // --- base body (plain neutral visual) ---
+  const profile = [
+    [0.03, -0.16], [0.09, -0.12], [hipR, -0.03], [hipR * 0.94, 0.06],
+    [waistR, 0.17], [waistR * 1.06, 0.25], [chestR * 0.9, 0.34], [chestR, 0.43],
+    [chestR * 0.9, 0.5], [0.088, 0.54], [0.05, 0.57],
+  ].map(([r, y]) => new THREE.Vector2(r, y));
+  const torso = new THREE.Mesh(new THREE.LatheGeometry(profile, 32), core);
+  torso.scale.z = zf;
+  group.add(torso);
+  group.add(capsule(0.04, 0.05, 0, 0.605, 0, core)); // neck
+  group.add(sphere(0.088, 0.108, 0.094, 0, 0.725, 0.006, core)); // head
+  const yoke = capsule(0.05, sw * 1.55, 0, 0.5, -0.005, core);
+  yoke.rotation.z = Math.PI / 2;
+  group.add(yoke);
+
+  // --- torso muscle areas ---
+  const front = chestR * zf; // approx front surface z at the chest
+  for (const s of [-1, 1]) {
+    placeArea(muscles, 'Chest', group, s * 0.058, 0.44, front - 0.01, [s * 0.5, 0.1, 1], 0.092, 0.082);
+    placeArea(muscles, 'Obliques', group, s * 0.09, 0.2, 0.06, [s * 0.7, -0.1, 0.8], 0.05, 0.12);
+    placeArea(muscles, 'Traps', group, s * 0.05, 0.53, -0.03, [s * 0.2, 0.5, -0.8], 0.07, 0.055);
+    placeArea(muscles, 'Lats', group, s * 0.086, 0.33, -0.072, [s * 0.4, 0, -0.9], 0.07, 0.14);
+    placeArea(muscles, 'Glutes', group, s * 0.062, -0.05, -0.062, [s * 0.15, -0.2, -0.95], 0.09, 0.085);
   }
-  addMuscle('Abs', sphere(0.07, 0.115, 0.04, 0, 0.2, 0.075, muscleMat()));
-  addMuscle('Lower Back', sphere(0.062, 0.065, 0.038, 0, 0.13, -0.07, muscleMat()));
+  placeArea(muscles, 'Abs', group, 0, 0.24, front - 0.02, [0, 0, 1], 0.09, 0.18);
+  placeArea(muscles, 'Lower Back', group, 0, 0.17, -0.086, [0, 0, -1], 0.1, 0.09);
 
   // --- arms ---
-  for (const side of [-1, 1]) {
+  for (const s of [-1, 1]) {
     const arm = new THREE.Group();
-    arm.position.set(side * (sw + 0.02), 0.5, 0);
-    arm.rotation.z = side * -0.1;
-    const core2 = coreMat();
-    arm.add(cyl(0.036, 0.032, 0.26, 0, -0.13, 0, core2)); // upper arm
-    arm.add(sphere(0.032, 0.032, 0.032, 0, -0.27, 0, core2)); // elbow
-    arm.add(cyl(0.03, 0.024, 0.24, 0, -0.4, 0, core2)); // forearm core
-    arm.add(sphere(0.028, 0.05, 0.032, 0, -0.55, 0, core2)); // hand
-    addMuscle('Shoulders', sphere(0.052, 0.055, 0.052, 0, 0.005, 0, muscleMat()), arm);
-    addMuscle('Biceps', sphere(0.036, 0.075, 0.038, 0, -0.13, 0.024, muscleMat()), arm);
-    addMuscle('Triceps', sphere(0.036, 0.08, 0.038, 0, -0.13, -0.024, muscleMat()), arm);
-    addMuscle('Forearms', sphere(0.034, 0.085, 0.034, 0, -0.36, 0.005, muscleMat()), arm);
+    arm.position.set(s * (sw + 0.008), 0.5, 0);
+    arm.rotation.z = s * -0.09;
+    const c = coreMat();
+    arm.add(capsule(0.033, 0.2, 0, -0.14, 0, c)); // upper arm
+    arm.add(capsule(0.027, 0.19, 0, -0.4, 0.004, c)); // forearm
+    arm.add(sphere(0.03, 0.052, 0.034, 0, -0.56, 0.004, c)); // hand
     group.add(arm);
+
+    placeArea(muscles, 'Shoulders', arm, 0, 0.015, 0.008, [s * 0.5, 0.55, 0.5], 0.078, 0.075);
+    placeArea(muscles, 'Biceps', arm, 0, -0.13, 0.034, [0, 0, 1], 0.05, 0.13);
+    placeArea(muscles, 'Triceps', arm, 0, -0.14, -0.034, [0, 0, -1], 0.05, 0.13);
+    placeArea(muscles, 'Forearms', arm, 0, -0.37, 0.028, [0, 0, 1], 0.045, 0.16);
   }
 
   // --- legs ---
-  for (const side of [-1, 1]) {
+  for (const s of [-1, 1]) {
     const leg = new THREE.Group();
-    leg.position.set(side * 0.09, -0.05, 0);
-    leg.rotation.z = side * -0.03;
-    const core3 = coreMat();
-    leg.add(cyl(0.068, 0.05, 0.45, 0, -0.22, 0, core3)); // thigh
-    leg.add(sphere(0.045, 0.045, 0.045, 0, -0.45, 0, core3)); // knee
-    leg.add(cyl(0.045, 0.03, 0.4, 0, -0.66, 0, core3)); // shin
-    leg.add(sphere(0.04, 0.03, 0.09, 0, -0.88, 0.04, core3)); // foot
-    addMuscle('Quads', sphere(0.055, 0.17, 0.05, 0, -0.2, 0.035, muscleMat()), leg);
-    addMuscle('Hamstrings', sphere(0.05, 0.15, 0.045, 0, -0.22, -0.035, muscleMat()), leg);
-    addMuscle('Calves', sphere(0.042, 0.12, 0.045, 0, -0.6, -0.025, muscleMat()), leg);
+    leg.position.set(s * 0.078, -0.06, 0);
+    leg.rotation.z = s * -0.02;
+    const c = coreMat();
+    leg.add(capsule(0.058, 0.34, 0, -0.24, 0, c)); // thigh
+    leg.add(capsule(0.042, 0.32, 0, -0.62, 0.002, c)); // shin
+    leg.add(sphere(0.042, 0.03, 0.095, 0, -0.9, 0.04, c)); // foot
     group.add(leg);
+
+    placeArea(muscles, 'Quads', leg, 0, -0.24, 0.058, [0, 0, 1], 0.085, 0.24);
+    placeArea(muscles, 'Hamstrings', leg, 0, -0.26, -0.058, [0, 0, -1], 0.08, 0.22);
+    placeArea(muscles, 'Calves', leg, 0, -0.6, -0.042, [0, 0, -1], 0.07, 0.14);
   }
 
-  group.position.y = 0.06;
+  group.position.y = 0.09;
   return { group, muscles };
 }
 
@@ -248,19 +333,32 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
 function applyColors(st, { selected, highlights }) {
   if (!st.muscles) return;
   const sel = new Set(selected);
-  for (const [name, meshes] of Object.entries(st.muscles)) {
-    let color = MUSCLE_BASE;
-    let emissive = 0;
+  for (const [name, fills] of Object.entries(st.muscles)) {
+    // Decide this muscle's look: idle (outline only), selected (solid red), or
+    // load-shaded (light→dark red by intensity).
+    let fillColor = SELECTED;
+    let fillOpacity = 0;
+    let borderColor = BORDER_IDLE;
+    let borderOpacity = 0.7;
     if (sel.has(name)) {
-      color = SELECTED;
-      emissive = 0.25;
+      fillColor = SELECTED;
+      fillOpacity = 0.62;
+      borderColor = SELECTED;
+      borderOpacity = 1;
     } else if (highlights[name] != null) {
-      color = new THREE.Color().lerpColors(HL_LIGHT, HL_DARK, Math.min(1, highlights[name]));
-      emissive = 0.12;
+      fillColor = new THREE.Color().lerpColors(HL_LIGHT, HL_DARK, Math.min(1, highlights[name]));
+      fillOpacity = 0.55;
+      borderColor = fillColor;
+      borderOpacity = 0.95;
     }
-    for (const m of meshes) {
-      m.material.color.copy(color);
-      m.material.emissive.copy(color).multiplyScalar(emissive);
+    for (const fill of fills) {
+      fill.material.color.copy(fillColor);
+      fill.material.opacity = fillOpacity;
+      const border = fill.userData.border;
+      if (border) {
+        border.material.color.copy(borderColor);
+        border.material.opacity = borderOpacity;
+      }
     }
   }
 }

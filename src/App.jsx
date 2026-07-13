@@ -1,10 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import { StoreProvider, useStore } from './store.jsx';
+import { DevModeContext } from './devmode.jsx';
 import MainTab from './components/MainTab.jsx';
 import LibraryTab from './components/LibraryTab.jsx';
 import WorkoutsTab from './components/WorkoutsTab.jsx';
 import SettingsTab from './components/SettingsTab.jsx';
 import ActiveWorkout from './components/ActiveWorkout.jsx';
+
+const PHONE_QUERY = '(max-width: 768px)';
+
+// Picks the layout from the actual screen size, updating on resize/rotate.
+function useViewportMode() {
+  const [mode, setMode] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia(PHONE_QUERY).matches ? 'phone' : 'laptop',
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(PHONE_QUERY);
+    const onChange = (e) => setMode(e.matches ? 'phone' : 'laptop');
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return mode;
+}
 
 const TABS = [
   { id: 'home', label: 'Home', icon: '🏠' },
@@ -61,29 +78,41 @@ function AppInner({ mode }) {
 }
 
 export default function App() {
-  const [mode, setMode] = useState(() => localStorage.getItem('dev-mode') || 'laptop');
-  useEffect(() => localStorage.setItem('dev-mode', mode), [mode]);
+  const isDev = import.meta.env.DEV;
+  const viewportMode = useViewportMode();
+
+  // Dev-only override so the layouts can be previewed on a laptop without
+  // resizing the window. Ignored entirely in production, where the layout just
+  // follows the real screen size.
+  const [override, setOverride] = useState(() =>
+    isDev ? localStorage.getItem('dev-mode') || null : null,
+  );
+  useEffect(() => {
+    if (!isDev) return;
+    if (override) localStorage.setItem('dev-mode', override);
+    else localStorage.removeItem('dev-mode');
+  }, [isDev, override]);
+
+  const mode = (isDev && override) || viewportMode;
+
+  // Draw the simulated phone bezel only when forcing phone mode on a wide
+  // screen during development — never in the shipped app.
+  const simulate = isDev && mode === 'phone' && viewportMode === 'laptop';
 
   return (
     <StoreProvider>
-      {/* dev-only toggle, not part of the app itself */}
-      <button
-        className="dev-toggle"
-        title="Dev only: toggle phone/laptop layout"
-        onClick={() => setMode(mode === 'phone' ? 'laptop' : 'phone')}
-      >
-        {mode === 'phone' ? '📱 phone — switch to 💻' : '💻 laptop — switch to 📱'}
-      </button>
-      {mode === 'phone' ? (
-        <div className="phone-stage">
-          <div className="phone-frame">
-            <div className="phone-notch" />
-            <AppInner mode="phone" />
+      <DevModeContext.Provider value={{ isDev, mode, override, setOverride }}>
+        {simulate ? (
+          <div className="phone-stage">
+            <div className="phone-frame">
+              <div className="phone-notch" />
+              <AppInner mode="phone" />
+            </div>
           </div>
-        </div>
-      ) : (
-        <AppInner mode="laptop" />
-      )}
+        ) : (
+          <AppInner mode={mode} />
+        )}
+      </DevModeContext.Provider>
     </StoreProvider>
   );
 }

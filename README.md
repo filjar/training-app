@@ -73,13 +73,18 @@ iPhone or Android, anywhere — can scan it to open the app, then:
 - **iPhone (Safari):** Share → **Add to Home Screen**
 - **Android (Chrome):** ⋮ menu → **Install app**
 
-## Dev-only phone/laptop toggle
+## Layout: responsive, with a dev-only preview toggle
 
-The pill button in the **bottom-left corner** switches between:
-- **💻 laptop mode** — sidebar navigation, side-by-side layouts, multi-column library
-- **📱 phone mode** — a 390px phone frame with bottom tab bar, stacked layout, bottom-sheet rest timer
+The app is **responsive**: it renders the phone layout (bottom tab bar, stacked, bottom-sheet rest
+timer) on narrow screens and the laptop layout (sidebar, side-by-side, multi-column library) on
+wide ones — driven by the real viewport width. The shipped app has no toggle and no fake phone
+frame.
 
-This toggle is for development only and is not a feature of the app itself.
+During development only (`npm run dev`), **Settings → Developer (preview build)** has a
+**Layout preview** control — *Auto (screen) / Phone / Laptop* — so you can preview either layout on
+your laptop. Forcing **Phone** on a wide screen draws a simulated phone bezel to show the mobile
+size. This whole section is gated behind `import.meta.env.DEV`, so it never appears in the deployed
+build.
 
 ## What's in v0.1
 
@@ -95,40 +100,42 @@ This toggle is for development only and is not a feature of the app itself.
 - **During a workout** — tap a set to mark it done (green), edit reps/weight on the fly,
   +/− sets, drag exercises to reorder, and a pull-out rest panel that counts down the active
   exercise's rest (or counts up as a plain stopwatch).
-- **Settings** — body type for the 3D model (woman default / man), JSON export/import for
-  moving data between devices without a server, demo-history loader, reset.
+- **Settings** — body type for the 3D model (woman default / man), open-on-phone QR + install,
+  JSON export/import for moving data between devices without a server, reset. A dev-only
+  "Developer (preview build)" section (layout preview + demo-history loader) shows only under
+  `npm run dev`.
 
 Data is stored in the browser's localStorage. "Load demo history" (Settings → Developer)
 fills ~6 weeks of fake sessions so PRs and popularity have something to show.
 
-## Anatomical 3D model — options for a real body
+## 3D body: base mesh + muscle-area overlays
 
-The current body is a stylized mannequin built from primitives (cheap, no downloads, easy to
-recolor per muscle). To swap in a proper anatomical model, the model needs **each muscle as a
-separately named mesh** so we can highlight them individually, exported to **glTF/GLB** and
-loaded with three.js's `GLTFLoader`. Best sources found:
+The 3D body ([`src/components/BodyModel.jsx`](src/components/BodyModel.jsx)) is built in two layers,
+which keeps the *visual* body independent from the *interactive* muscles:
 
-- **Z-Anatomy** — a full open-source 3D atlas (skeleton, muscles, vessels, nerves) derived from
-  BodyParts3D. Licensed **CC BY-SA 4.0** (attribution + share-alike). Distributed as a Blender
-  file, so you'd open it in Blender, keep the muscle layer, and export to GLB.
-  <https://github.com/Z-Anatomy/Models-of-human-anatomy>
-- **BodyParts3D** (the underlying dataset, University of Tokyo) — individually named anatomical
-  parts, **CC BY-SA 2.1 JP**. Most granular, but the rawest to work with.
-- **Meshy** — muscle/anatomy assets under **CC0** (no attribution, commercial-OK), good if you
-  want to avoid share-alike licensing. <https://www.meshy.ai/tags/anatomy>
-- **Sketchfab / TurboSquid / CGTrader** — many free and paid models; check each model's license
-  and confirm muscles are split into named meshes before buying.
+1. **Base body** — a plain neutral mannequin (a lathed torso + capsule limbs). It's just a
+   backdrop; it isn't itself colored or clickable.
+2. **Muscle areas** — one thin, curved "sticker" patch laid on the surface per muscle. When idle a
+   patch is invisible except for its **outline** (so you can see where to tap); when selected or
+   shaded by workout load it **fills red** (light → dark by intensity). Patches are front-face
+   only, so a tap can't pass through the torso and grab a muscle on the far side.
 
-Practical notes: these are heavy, medically-detailed meshes, so for a phone-friendly app they'd
-need decimating in Blender and the muscle meshes renaming to match our muscle keys
-(e.g. `Chest`, `Quads`). CC BY-SA obliges us to credit the source and share modifications alike;
-CC0 (Meshy) has no such strings. I'd suggest starting from **Z-Anatomy** for quality, or **Meshy
-CC0** if you want the simplest licensing — say the word and I'll wire `GLTFLoader` into
-`BodyModel.jsx` behind the same muscle-highlight API it already exposes.
+Because the interactivity lives entirely in the overlay, **the base body can be swapped for a
+realistic model without touching the muscle logic** — e.g. a **Meshy** CC0 body
+(<https://www.meshy.ai/tags/anatomy>). Meshy models are single meshes (not split into named
+muscles), which is exactly why the overlay approach fits: the Meshy body becomes the visual base
+and the same patches sit on top. To do that you'd drop the GLB into `public/models/`, load it as
+the base, and re-tune each patch's position/size against it (placement is model-specific — anatomy
+reference images make this straightforward). Ping me with the file and I'll wire it in.
+
+For a model that is *itself* per-muscle selectable (no overlay needed), **Z-Anatomy** (segmented,
+CC BY-SA 4.0, <https://github.com/Z-Anatomy/Models-of-human-anatomy>) is the alternative, but it
+needs Blender work to export/rename meshes.
 
 ## Known limitations (v0.1)
 
-- The 3D body is a stylized low-poly mannequin, not an anatomical model (see options above).
+- The 3D base body is a stylized mannequin; muscle areas are placed by hand (swap in a realistic
+  base model as above to improve the look).
 - Editing reps/weight in the workout *editor* applies to all sets of that exercise
   (per-set editing is available during an active workout).
 - "Scan & bring my data" replaces the receiving device's data with the sender's (it's a
