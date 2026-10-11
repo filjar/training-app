@@ -1,189 +1,147 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 
-const NEUTRAL = new THREE.Color(0x9aa1ad);
+// Muscle ids baked into the models' `_MUSCLE` vertex attribute, in the order
+// scripts/body/build_body.py writes them (0 = not a muscle).
+const MUSCLES = [
+  null, 'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps', 'Forearms', 'Abs',
+  'Obliques', 'Lats', 'Lower Back', 'Glutes', 'Quads', 'Hamstrings', 'Calves',
+];
+
+// Each muscle's border weight lives in one of four channels, chosen so that no
+// two neighbouring muscles share a channel. Interpolating the channels
+// separately keeps every outline clean even where two muscles meet.
+const CHANNEL = {
+  Shoulders: 0, Forearms: 0, Abs: 0, 'Lower Back': 0, Quads: 0, Calves: 0,
+  Chest: 1, Traps: 1, Biceps: 1, Glutes: 1,
+  Triceps: 2, Obliques: 2, Hamstrings: 2,
+  Lats: 3,
+};
+
+const SKIN = new THREE.Color(0xc4bcb4); // the body surface
+const OUTLINE = new THREE.Color(0x6f6a66); // border of an unselected muscle
 const SELECTED = new THREE.Color(0xe0452f);
 const HL_LIGHT = new THREE.Color(0xf0a596);
 const HL_DARK = new THREE.Color(0x8f1c0a);
-const BORDER_IDLE = new THREE.Color(0x7f8aa2); // faint outline of an unselected muscle area
 
-function coreMat() {
-  return new THREE.MeshStandardMaterial({ color: NEUTRAL, roughness: 0.8, metalness: 0.04 });
+const BODY_HEIGHT = 1.86; // world units the model is scaled to, to fill the view
+// A tap that lands just outside a muscle still selects it if one is this close.
+const TAP_SLOP = 0.04;
+
+const loader = new GLTFLoader();
+const modelCache = {};
+
+// Loads a body model once and returns its prepared geometry: centred, scaled,
+// with smooth normals and the per-vertex muscle ids + weights split out of the
+// packed `_MUSCLE` / `_MUSCLE2` attributes (id in the integer part, weight in
+// the fraction). A weight crosses 0.5 exactly on that muscle's border.
+function loadBody(bodyType) {
+  modelCache[bodyType] ??= loader
+    .loadAsync(`${import.meta.env.BASE_URL}models/${bodyType}.glb`)
+    .then((gltf) => {
+      let geo = null;
+      gltf.scene.traverse((o) => { if (o.isMesh && !geo) geo = o.geometry; });
+      geo.computeBoundingBox();
+      const box = geo.boundingBox;
+      const scale = BODY_HEIGHT / (box.max.y - box.min.y);
+      geo.translate(-(box.max.x + box.min.x) / 2, -(box.max.y + box.min.y) / 2, -(box.max.z + box.min.z) / 2);
+      geo.scale(scale, scale, scale);
+      geo.computeVertexNormals();
+      const n = geo.attributes.position.count;
+      // Unpack into one (muscle id, weight) slot per channel.
+      const ids = new Float32Array(n * 4);
+      const weights = new Float32Array(n * 4);
+      for (const src of [geo.attributes._muscle, geo.attributes._muscle2]) {
+        for (let i = 0; i < n; i++) {
+          const packed = src.getX(i);
+          const id = Math.floor(packed + 1e-4);
+          const w = Math.min(1, (packed - id) / 0.98);
+          if (!id || w <= 0) continue;
+          const slot = i * 4 + CHANNEL[MUSCLES[id]];
+          if (w > weights[slot]) { ids[slot] = id; weights[slot] = w; }
+        }
+      }
+      geo.deleteAttribute('_muscle');
+      geo.deleteAttribute('_muscle2');
+      geo.setAttribute('aMuscle', new THREE.BufferAttribute(ids, 4));
+      geo.setAttribute('aWeight', new THREE.BufferAttribute(weights, 4));
+      return { geo, ids, weights };
+    });
+  return modelCache[bodyType];
 }
 
-function sphere(sx, sy, sz, x, y, z, mat) {
-  const m = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), mat);
-  m.scale.set(sx, sy, sz);
-  m.position.set(x, y, z);
-  return m;
+// Body material: standard shading, with each muscle region filled from a
+// per-muscle palette and outlined. Fill and outline are cut where the
+// interpolated weight crosses 0.5, so borders are smooth curves rather than
+// following the mesh's triangles.
+function makeBodyMaterial() {
+  const palette = MUSCLES.map(() => new THREE.Vector4(0, 0, 0, 0)); // rgb + fill strength
+  const material = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.7, metalness: 0 });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.uPalette = { value: palette };
+    shader.uniforms.uOutline = { value: OUTLINE };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute vec4 aMuscle;
+        attribute vec4 aWeight;
+        uniform vec4 uPalette[${MUSCLES.length}];
+        varying vec4 vWeight;
+        varying vec4 vTint[4];`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vWeight = aWeight;
+        for (int c = 0; c < 4; c++) vTint[c] = uPalette[int(aMuscle[c] + 0.5)] * aWeight[c];`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform vec3 uOutline;
+        varying vec4 vWeight;
+        varying vec4 vTint[4];`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        for (int c = 0; c < 4; c++) {
+          float w = vWeight[c];
+          if (w < 1e-3) continue;
+          float fw = max(fwidth(w), 1e-4);
+          vec4 tint = vTint[c] / w;
+          diffuseColor.rgb = mix(diffuseColor.rgb, tint.rgb, smoothstep(0.5 - fw, 0.5 + fw, w) * tint.a);
+          float line = 1.0 - smoothstep(fw * 0.6, fw * 1.8, abs(w - 0.5));
+          diffuseColor.rgb = mix(diffuseColor.rgb, mix(uOutline, tint.rgb * 0.7, tint.a), line * 0.7);
+        }`);
+  };
+  material.userData.palette = palette;
+  return material;
 }
-// Capsule (rounded cylinder) — a limb segment. Oriented along Y.
-function capsule(r, len, x, y, z, mat) {
-  const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, len, 8, 20), mat);
-  m.position.set(x, y, z);
-  return m;
-}
 
-// ---- muscle-area overlays -------------------------------------------------
-// Each muscle is a thin "sticker" laid on the body surface: a rounded patch
-// that is invisible when idle (only its outline shows, to aid tapping) and
-// fills with red when selected or shaded by workout load. This keeps the body
-// mesh itself a plain visual, so any realistic base model can sit underneath.
-
-function roundedRectShape(w, h, r) {
-  const s = new THREE.Shape();
-  const x = -w / 2, y = -h / 2;
-  r = Math.min(r, w / 2, h / 2);
-  s.moveTo(x + r, y);
-  s.lineTo(x + w - r, y);
-  s.quadraticCurveTo(x + w, y, x + w, y + r);
-  s.lineTo(x + w, y + h - r);
-  s.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
-  s.lineTo(x + r, y + h);
-  s.quadraticCurveTo(x, y + h, x, y + h - r);
-  s.lineTo(x, y + r);
-  s.quadraticCurveTo(x, y, x + r, y);
-  return s;
-}
-
-// Gentle outward bulge so a patch hugs a rounded surface instead of floating flat.
-function bulgeZ(x, y, w, h, curve) {
-  const nx = x / (w / 2), ny = y / (h / 2);
-  return curve * Math.max(0, 1 - nx * nx) * Math.max(0, 1 - ny * ny);
-}
-
-function makeArea(w, h, curve) {
-  const shape = roundedRectShape(w, h, Math.min(w, h) * 0.42);
-
-  const fillGeo = new THREE.ShapeGeometry(shape, 18);
-  const pos = fillGeo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    pos.setZ(i, bulgeZ(pos.getX(i), pos.getY(i), w, h, curve));
+// Which muscle a tap at `point` on triangle `face` means: the muscle whose
+// weight, interpolated at the tap, is inside its border — or failing that the
+// closest muscle surface within TAP_SLOP.
+function muscleAt(body, face, point) {
+  const pos = body.geo.attributes.position;
+  const tri = [face.a, face.b, face.c];
+  const [a, b, c] = tri.map((i) => new THREE.Vector3().fromBufferAttribute(pos, i));
+  const bary = new THREE.Triangle(a, b, c).getBarycoord(point, new THREE.Vector3()) || new THREE.Vector3(1, 0, 0);
+  const sums = {};
+  tri.forEach((i, k) => {
+    for (let c = 0; c < 4; c++) {
+      const id = body.ids[i * 4 + c];
+      if (id) sums[id] = (sums[id] || 0) + bary.getComponent(k) * body.weights[i * 4 + c];
+    }
+  });
+  let best = 0;
+  let bestW = 0.5;
+  for (const [id, w] of Object.entries(sums)) if (w >= bestW) { best = +id; bestW = w; }
+  if (!best) {
+    const v = new THREE.Vector3();
+    let bestD = TAP_SLOP * TAP_SLOP;
+    for (let i = 0; i < pos.count; i++) {
+      for (let c = 0; c < 4; c++) {
+        if (body.weights[i * 4 + c] < 0.5) continue;
+        const d = v.fromBufferAttribute(pos, i).distanceToSquared(point);
+        if (d < bestD) { bestD = d; best = body.ids[i * 4 + c]; }
+      }
+    }
   }
-  pos.needsUpdate = true;
-  fillGeo.computeVertexNormals();
-  const fill = new THREE.Mesh(
-    fillGeo,
-    new THREE.MeshBasicMaterial({
-      color: SELECTED.clone(),
-      transparent: true,
-      opacity: 0,
-      // Front-face only: a patch is tappable only when its muscle actually
-      // faces the camera, so a click can't pass through the torso and grab a
-      // muscle on the far side.
-      side: THREE.FrontSide,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: -6,
-      polygonOffsetUnits: -6,
-    }),
-  );
-  fill.renderOrder = 2;
-
-  const outline = shape
-    .getPoints(56)
-    .map((p) => new THREE.Vector3(p.x, p.y, bulgeZ(p.x, p.y, w, h, curve)));
-  const border = new THREE.LineLoop(
-    new THREE.BufferGeometry().setFromPoints(outline),
-    new THREE.LineBasicMaterial({ color: BORDER_IDLE.clone(), transparent: true, opacity: 0.7 }),
-  );
-  border.renderOrder = 3;
-
-  const group = new THREE.Group();
-  group.add(fill, border);
-  fill.userData.border = border;
-  return { group, fill };
-}
-
-const UP_Z = new THREE.Vector3(0, 0, 1);
-
-// Places a muscle area centred at (x,y,z) on the surface, facing `face`.
-function placeArea(muscles, name, parent, x, y, z, face, w, h, curve = 0.02) {
-  const { group, fill } = makeArea(w, h, curve);
-  const f = new THREE.Vector3(...face).normalize();
-  group.quaternion.setFromUnitVectors(UP_Z, f);
-  group.position.set(x, y, z);
-  fill.userData.muscle = name;
-  (muscles[name] ??= []).push(fill);
-  parent.add(group);
-}
-
-// Builds the body: a plain neutral base mesh plus the selectable muscle areas.
-// Returns { group, muscles: { name: [fillMesh,...] } }.
-function buildBody(bodyType) {
-  const isMan = bodyType === 'man';
-  const sw = isMan ? 0.205 : 0.165; // shoulder half-width
-  const hipR = isMan ? 0.125 : 0.142;
-  const waistR = isMan ? 0.107 : 0.097;
-  const chestR = isMan ? 0.152 : 0.126;
-  const zf = 0.82; // torso front/back flattening
-
-  const group = new THREE.Group();
-  const muscles = {};
-  const core = coreMat();
-
-  // --- base body (plain neutral visual) ---
-  const profile = [
-    [0.03, -0.16], [0.09, -0.12], [hipR, -0.03], [hipR * 0.94, 0.06],
-    [waistR, 0.17], [waistR * 1.06, 0.25], [chestR * 0.9, 0.34], [chestR, 0.43],
-    [chestR * 0.9, 0.5], [0.088, 0.54], [0.05, 0.57],
-  ].map(([r, y]) => new THREE.Vector2(r, y));
-  const torso = new THREE.Mesh(new THREE.LatheGeometry(profile, 32), core);
-  torso.scale.z = zf;
-  group.add(torso);
-  group.add(capsule(0.04, 0.05, 0, 0.605, 0, core)); // neck
-  group.add(sphere(0.088, 0.108, 0.094, 0, 0.725, 0.006, core)); // head
-  const yoke = capsule(0.05, sw * 1.55, 0, 0.5, -0.005, core);
-  yoke.rotation.z = Math.PI / 2;
-  group.add(yoke);
-
-  // --- torso muscle areas ---
-  const front = chestR * zf; // approx front surface z at the chest
-  for (const s of [-1, 1]) {
-    placeArea(muscles, 'Chest', group, s * 0.058, 0.44, front - 0.01, [s * 0.5, 0.1, 1], 0.092, 0.082);
-    placeArea(muscles, 'Obliques', group, s * 0.09, 0.2, 0.06, [s * 0.7, -0.1, 0.8], 0.05, 0.12);
-    placeArea(muscles, 'Traps', group, s * 0.05, 0.53, -0.03, [s * 0.2, 0.5, -0.8], 0.07, 0.055);
-    placeArea(muscles, 'Lats', group, s * 0.086, 0.33, -0.072, [s * 0.4, 0, -0.9], 0.07, 0.14);
-    placeArea(muscles, 'Glutes', group, s * 0.062, -0.05, -0.062, [s * 0.15, -0.2, -0.95], 0.09, 0.085);
-  }
-  placeArea(muscles, 'Abs', group, 0, 0.24, front - 0.02, [0, 0, 1], 0.09, 0.18);
-  placeArea(muscles, 'Lower Back', group, 0, 0.17, -0.086, [0, 0, -1], 0.1, 0.09);
-
-  // --- arms ---
-  for (const s of [-1, 1]) {
-    const arm = new THREE.Group();
-    arm.position.set(s * (sw + 0.008), 0.5, 0);
-    arm.rotation.z = s * -0.09;
-    const c = coreMat();
-    arm.add(capsule(0.033, 0.2, 0, -0.14, 0, c)); // upper arm
-    arm.add(capsule(0.027, 0.19, 0, -0.4, 0.004, c)); // forearm
-    arm.add(sphere(0.03, 0.052, 0.034, 0, -0.56, 0.004, c)); // hand
-    group.add(arm);
-
-    placeArea(muscles, 'Shoulders', arm, 0, 0.015, 0.008, [s * 0.5, 0.55, 0.5], 0.078, 0.075);
-    placeArea(muscles, 'Biceps', arm, 0, -0.13, 0.034, [0, 0, 1], 0.05, 0.13);
-    placeArea(muscles, 'Triceps', arm, 0, -0.14, -0.034, [0, 0, -1], 0.05, 0.13);
-    placeArea(muscles, 'Forearms', arm, 0, -0.37, 0.028, [0, 0, 1], 0.045, 0.16);
-  }
-
-  // --- legs ---
-  for (const s of [-1, 1]) {
-    const leg = new THREE.Group();
-    leg.position.set(s * 0.078, -0.06, 0);
-    leg.rotation.z = s * -0.02;
-    const c = coreMat();
-    leg.add(capsule(0.058, 0.34, 0, -0.24, 0, c)); // thigh
-    leg.add(capsule(0.042, 0.32, 0, -0.62, 0.002, c)); // shin
-    leg.add(sphere(0.042, 0.03, 0.095, 0, -0.9, 0.04, c)); // foot
-    group.add(leg);
-
-    placeArea(muscles, 'Quads', leg, 0, -0.24, 0.058, [0, 0, 1], 0.085, 0.24);
-    placeArea(muscles, 'Hamstrings', leg, 0, -0.26, -0.058, [0, 0, -1], 0.08, 0.22);
-    placeArea(muscles, 'Calves', leg, 0, -0.6, -0.042, [0, 0, -1], 0.07, 0.14);
-  }
-
-  group.position.y = 0.09;
-  return { group, muscles };
+  return MUSCLES[best];
 }
 
 /**
@@ -205,6 +163,8 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
   const mountRef = useRef(null);
   const [zoomed, setZoomed] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [touched, setTouched] = useState(false); // the hint goes away once the model has been used
   const stateRef = useRef({});
   const propsRef = useRef({});
   propsRef.current = { selected, highlights, onToggle };
@@ -221,13 +181,18 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x666677, 1.1));
-    const dir = new THREE.DirectionalLight(0xffffff, 1.4);
-    dir.position.set(2, 3, 4);
-    scene.add(dir);
-    const dir2 = new THREE.DirectionalLight(0xaabbff, 0.5);
-    dir2.position.set(-2, 1, -3);
-    scene.add(dir2);
+    // Studio lighting: a low environment for fill, a strong key light from the
+    // upper side so muscle definition casts shading, and a rim light from behind.
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.3;
+    pmrem.dispose();
+    const key = new THREE.DirectionalLight(0xffffff, 2.3);
+    key.position.set(2.6, 3.2, 2.4);
+    scene.add(key);
+    const rim = new THREE.DirectionalLight(0xdde6ff, 0.9);
+    rim.position.set(-2.5, 2, -3);
+    scene.add(rim);
 
     const st = stateRef.current;
     st.scene = scene;
@@ -282,6 +247,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
 
     const onDown = (e) => {
       if (pointers.size === 0) moved = 0;
+      setTouched(true);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       el.setPointerCapture(e.pointerId);
       if (pointers.size === 2) {
@@ -302,7 +268,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
       }
       moved += Math.abs(dx) + Math.abs(dy);
       st.rotY += (dx * 0.012) / Math.sqrt(st.zoom);
-      if (st.body) st.body.rotation.y = st.rotY;
+      if (st.mesh) st.mesh.rotation.y = st.rotY;
       if (st.zoom > 1.01) {
         st.panY += (dy * 2 * VIEW_HALF) / (st.zoom * (mount.clientHeight || 1));
         applyView();
@@ -312,16 +278,17 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
       if (!pointers.delete(e.pointerId)) return;
       if (pointers.size < 2) pinch = null;
       if (pointers.size > 0 || e.type === 'pointercancel') return;
-      if (moved < 6 && propsRef.current.onToggle && st.muscles) {
+      if (moved < 6 && propsRef.current.onToggle && st.body) {
         const rect = el.getBoundingClientRect();
         const p = new THREE.Vector2(
           ((e.clientX - rect.left) / rect.width) * 2 - 1,
           -((e.clientY - rect.top) / rect.height) * 2 + 1,
         );
         st.raycaster.setFromCamera(p, camera);
-        const meshes = Object.values(st.muscles).flat();
-        const hits = st.raycaster.intersectObjects(meshes, false);
-        if (hits.length) propsRef.current.onToggle(hits[0].object.userData.muscle);
+        const hit = st.raycaster.intersectObject(st.mesh, false)[0];
+        // The hit point is in world space; the body only ever rotates, so undo that.
+        const muscle = hit && muscleAt(st.body, hit.face, st.mesh.worldToLocal(hit.point.clone()));
+        if (muscle) propsRef.current.onToggle(muscle);
       }
     };
     // Trackpad pinch arrives as ctrl+wheel; plain wheel is left alone so the
@@ -352,27 +319,30 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('pointercancel', onUp);
       el.removeEventListener('wheel', onWheel);
+      st.mesh?.material.dispose(); // the geometry is shared and cached, so it stays
       renderer.dispose();
       mount.removeChild(el);
     };
   }, []);
 
-  // (re)build body when bodyType changes
+  // (re)load the body when bodyType changes
   useEffect(() => {
     const st = stateRef.current;
-    if (st.body) {
-      st.scene.remove(st.body);
-      st.body.traverse((o) => {
-        if (o.geometry) o.geometry.dispose();
-        if (o.material) o.material.dispose();
-      });
-    }
-    const { group, muscles } = buildBody(bodyType);
-    group.rotation.y = st.rotY;
-    st.scene.add(group);
-    st.body = group;
-    st.muscles = muscles;
-    applyColors(st, propsRef.current);
+    let cancelled = false;
+    loadBody(bodyType).then((body) => {
+      if (cancelled) return;
+      if (st.mesh) {
+        st.scene.remove(st.mesh);
+        st.mesh.material.dispose();
+      }
+      st.mesh = new THREE.Mesh(body.geo, makeBodyMaterial());
+      st.mesh.rotation.y = st.rotY;
+      st.scene.add(st.mesh);
+      st.body = body;
+      applyColors(st, propsRef.current);
+      setLoaded(true);
+    });
+    return () => { cancelled = true; };
   }, [bodyType]);
 
   // recolor when selection/highlights change
@@ -386,6 +356,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     <div className={`body-model-wrap ${collapsed ? 'collapsed' : ''}`}>
       <div className="body-model-stage">
         <div ref={mountRef} style={{ width: '100%', height: collapsed ? 0 : height, overflow: 'hidden' }} />
+        {!loaded && !collapsed && <div className="body-model-loading">Loading body…</div>}
         {!collapsed && (
           <>
             <div className="body-model-zoom">
@@ -395,7 +366,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
                 <button className="icon-btn" title="Reset zoom" onClick={() => stateRef.current.setZoom(1)}>reset</button>
               )}
             </div>
-            {!zoomed && <div className="body-model-hint">drag to spin · pinch to zoom · tap a muscle</div>}
+            {!zoomed && !touched && loaded && <div className="body-model-hint">drag to spin · pinch to zoom · tap a muscle</div>}
           </>
         )}
       </div>
@@ -414,34 +385,16 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
 }
 
 function applyColors(st, { selected, highlights }) {
-  if (!st.muscles) return;
+  if (!st.mesh) return;
   const sel = new Set(selected);
-  for (const [name, fills] of Object.entries(st.muscles)) {
-    // Decide this muscle's look: idle (outline only), selected (solid red), or
-    // load-shaded (light→dark red by intensity).
-    let fillColor = SELECTED;
-    let fillOpacity = 0;
-    let borderColor = BORDER_IDLE;
-    let borderOpacity = 0.7;
-    if (sel.has(name)) {
-      fillColor = SELECTED;
-      fillOpacity = 0.62;
-      borderColor = SELECTED;
-      borderOpacity = 1;
-    } else if (highlights[name] != null) {
-      fillColor = new THREE.Color().lerpColors(HL_LIGHT, HL_DARK, Math.min(1, highlights[name]));
-      fillOpacity = 0.55;
-      borderColor = fillColor;
-      borderOpacity = 0.95;
-    }
-    for (const fill of fills) {
-      fill.material.color.copy(fillColor);
-      fill.material.opacity = fillOpacity;
-      const border = fill.userData.border;
-      if (border) {
-        border.material.color.copy(borderColor);
-        border.material.opacity = borderOpacity;
-      }
-    }
-  }
+  // Per muscle: selected (solid red), load-shaded (light→dark red by
+  // intensity), or idle (no fill, just the outline).
+  st.mesh.material.userData.palette.forEach((slot, id) => {
+    const name = MUSCLES[id];
+    if (name && sel.has(name)) slot.set(SELECTED.r, SELECTED.g, SELECTED.b, 1);
+    else if (name && highlights[name] != null) {
+      const c = new THREE.Color().lerpColors(HL_LIGHT, HL_DARK, Math.min(1, highlights[name]));
+      slot.set(c.r, c.g, c.b, 1);
+    } else slot.set(0, 0, 0, 0);
+  });
 }

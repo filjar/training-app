@@ -210,6 +210,7 @@ input[type='number'] {
   text-align: center; font-size: 11px; color: var(--muted);
   pointer-events: none;
 }
+.body-model-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12.5px; color: var(--muted); pointer-events: none; }
 .body-model-zoom { position: absolute; top: 6px; right: 6px; display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
 .body-model-zoom .icon-btn { min-width: 34px; min-height: 34px; font-size: 15px; }
 .body-model-zoom .icon-btn:disabled { opacity: 0.4; cursor: default; }

@@ -47,6 +47,8 @@ export default defineConfig(({ command }) => ({
           { src: 'maskable-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
+      // Precache the 3D body models too, so the muscle selector works offline.
+      workbox: { globPatterns: ['**/*.{js,css,html,png,svg,glb}'] },
       // Let us test the installable app on localhost during dev too.
       devOptions: { enabled: true },
     }),
