@@ -2,9 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { useStore } from '../store.jsx';
 import { muscleLoad, workoutMuscles, fmtWeight } from '../logic/stats.js';
 import { exerciseById } from '../data/exercises.js';
+import { planSchedule } from '../logic/plan.js';
 import BodyModel from './BodyModel.jsx';
 
-export default function MainTab({ onStart }) {
+export default function MainTab({ onStart, onOpenPlan }) {
   const { state } = useStore();
   const [selectedMuscles, setSelectedMuscles] = useState([]);
   const [selectedWorkoutId, setSelectedWorkoutId] = useState(null);
@@ -13,6 +14,14 @@ export default function MainTab({ onStart }) {
 
   // When a workout is selected it drives the model highlights (load intensity).
   const highlights = useMemo(() => (selectedWorkout ? muscleLoad(selectedWorkout) : {}), [selectedWorkout]);
+
+  // The plan's next session, if a plan is set up and its workout still exists.
+  const nextUp = useMemo(() => {
+    if (!state.plan) return null;
+    const day = planSchedule(state.plan, state.history).nextUp;
+    const workout = day && state.workouts.find((w) => w.id === day.slot.workoutId);
+    return workout ? { day, workout } : null;
+  }, [state.plan, state.history, state.workouts]);
 
   const toggleMuscle = (m) => {
     setSelectedWorkoutId(null);
@@ -36,6 +45,9 @@ export default function MainTab({ onStart }) {
           highlights={highlights}
           onToggle={toggleMuscle}
           height={380}
+          summary={
+            selectedWorkout ? selectedWorkout.name : selectedMuscles.length ? selectedMuscles.join(', ') : 'No muscles selected'
+          }
         />
         <div className="main-model-caption">
           {selectedWorkout ? (
@@ -55,6 +67,23 @@ export default function MainTab({ onStart }) {
       </div>
 
       <div className="main-list">
+        {nextUp && (
+          <div className="card next-up">
+            <div className="muted tiny">
+              NEXT IN YOUR PLAN ·{' '}
+              {nextUp.day.isToday ? 'today' : nextUp.day.date.toLocaleDateString(undefined, { weekday: 'long' })}
+            </div>
+            <div className="row space-between gap">
+              <button className="link-btn next-up-name" onClick={() => setSelectedWorkoutId(nextUp.workout.id)}>
+                {nextUp.workout.name}
+              </button>
+              <div className="row gap">
+                <button className="btn small" onClick={onOpenPlan}>Plan</button>
+                <button className="btn small primary" onClick={() => onStart(nextUp.workout)}>Start</button>
+              </div>
+            </div>
+          </div>
+        )}
         <h2>
           {selectedMuscles.length ? `Workouts for ${selectedMuscles.join(' + ')}` : "Today's workout"}
           <span className="muted small"> ({filtered.length})</span>

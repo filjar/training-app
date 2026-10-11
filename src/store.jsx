@@ -36,6 +36,7 @@ const initialState = () => ({
   settings: { bodyType: 'woman' },
   workouts: sampleWorkouts(),
   history: [],
+  plan: null,
   active: null,
 });
 
@@ -74,6 +75,17 @@ function reducer(state, action) {
     }
     case 'deleteWorkout':
       return { ...state, workouts: state.workouts.filter((w) => w.id !== action.id) };
+    // Switching or removing a plan also removes the workouts the old plan generated.
+    case 'setPlan':
+      return {
+        ...state,
+        plan: action.plan,
+        workouts: [...state.workouts.filter((w) => !w.fromPlan), ...action.workouts],
+      };
+    case 'updatePlan':
+      return { ...state, plan: { ...state.plan, ...action.patch } };
+    case 'clearPlan':
+      return { ...state, plan: null, workouts: state.workouts.filter((w) => !w.fromPlan) };
     case 'startWorkout': {
       const w = action.workout;
       return {
@@ -160,7 +172,7 @@ export function makeDemoHistory(workouts) {
 
 export function exportData(state) {
   const blob = new Blob(
-    [JSON.stringify({ settings: state.settings, workouts: state.workouts, history: state.history }, null, 2)],
+    [JSON.stringify({ settings: state.settings, workouts: state.workouts, history: state.history, plan: state.plan }, null, 2)],
     { type: 'application/json' },
   );
   const url = URL.createObjectURL(blob);

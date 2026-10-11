@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { StoreProvider, useStore } from './store.jsx';
 import { DevModeContext } from './devmode.jsx';
 import MainTab from './components/MainTab.jsx';
+import PlanTab from './components/PlanTab.jsx';
 import LibraryTab from './components/LibraryTab.jsx';
 import WorkoutsTab from './components/WorkoutsTab.jsx';
 import SettingsTab from './components/SettingsTab.jsx';
@@ -25,8 +26,9 @@ function useViewportMode() {
 
 const TABS = [
   { id: 'home', label: 'Home', icon: '🏠' },
-  { id: 'library', label: 'Library', icon: '📚' },
+  { id: 'plan', label: 'Plan', icon: '🗓️' },
   { id: 'workouts', label: 'Workouts', icon: '📋' },
+  { id: 'library', label: 'Library', icon: '📚' },
   { id: 'settings', label: 'Settings', icon: '⚙️' },
 ];
 
@@ -42,7 +44,8 @@ function AppInner({ mode }) {
   } else {
     content = (
       <>
-        {tab === 'home' && <MainTab onStart={startWorkout} />}
+        {tab === 'home' && <MainTab onStart={startWorkout} onOpenPlan={() => setTab('plan')} />}
+        {tab === 'plan' && <PlanTab onStart={startWorkout} />}
         {tab === 'library' && <LibraryTab />}
         {tab === 'workouts' && <WorkoutsTab onStart={startWorkout} />}
         {tab === 'settings' && <SettingsTab />}

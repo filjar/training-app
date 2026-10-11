@@ -142,6 +142,7 @@ export function WorkoutEditor({ initial, onSave, onCancel }) {
                 selected={pickerMuscle ? [pickerMuscle] : []}
                 onToggle={(m) => setPickerMuscle((cur) => (cur === m ? null : m))}
                 height={260}
+                summary={pickerMuscle || 'No muscle selected'}
               />
               {!pickerMuscle && <div className="muted small center">Tap a muscle to browse its exercises.</div>}
               {pickerMuscle && (
@@ -168,6 +169,7 @@ export function WorkoutEditor({ initial, onSave, onCancel }) {
                 selected={genMuscles}
                 onToggle={(m) => setGenMuscles((cur) => (cur.includes(m) ? cur.filter((x) => x !== m) : [...cur, m]))}
                 height={260}
+                summary={genMuscles.length ? genMuscles.join(', ') : 'No muscles selected'}
               />
               <div className="muted small center">
                 {genMuscles.length ? genMuscles.join(', ') : 'Tap the muscles you want to train.'}

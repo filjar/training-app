@@ -17,7 +17,7 @@ export const LAN_URL =
 export const QR_SAFE_CHARS = 2200;
 
 function payload(state) {
-  return { v: 1, settings: state.settings, workouts: state.workouts, history: state.history };
+  return { v: 1, settings: state.settings, workouts: state.workouts, history: state.history, plan: state.plan };
 }
 
 // lz-string's "EncodedURIComponent" alphabet still contains '+', which a real

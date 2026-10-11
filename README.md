@@ -39,27 +39,14 @@ phone *open* the app but not fully *install* it.
 
 ### Deploy to GitHub Pages (free https, set up for you)
 
-This repo already contains everything needed: a GitHub Actions workflow
-([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) that builds the app and publishes
-it to Pages on every push, and a base-path setup that auto-matches your repo name (so the app
-correctly lives at `https://<user>.github.io/<repo>/`). One-time steps:
+The app is deployed at **<https://filjar.github.io/training-app/>**. A GitHub Actions workflow
+([`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)) builds it and publishes it to
+Pages on every push to `main`, so `git push` is the whole deploy — the new version is live about a
+minute later. The base path auto-matches the repo name (and a repo named `<user>.github.io` is
+served at the root instead).
 
-```bash
-# from this folder
-git init && git add -A && git commit -m "Training app"
-git branch -M main
-# create the repo on your account (needs the GitHub CLI `gh`, logged in) …
-gh repo create training-app --public --source=. --push
-# … or make an empty repo on github.com and:
-#   git remote add origin https://github.com/<user>/training-app.git && git push -u origin main
-```
-
-Then in the repo on github.com: **Settings → Pages → Build and deployment → Source: GitHub
-Actions**. Push (or re-run the workflow) and in ~1 minute your app is live at
-`https://<user>.github.io/training-app/`. Every later `git push` redeploys automatically.
-
-> If you name the repo exactly `<user>.github.io`, the workflow serves it at the root instead —
-> that's handled automatically.
+Setting this up for a new repo: push it to GitHub, then **Settings → Pages → Build and
+deployment → Source: GitHub Actions**.
 
 ### Or: temporary https tunnel (test from your phone right now, no deploy)
 
@@ -88,9 +75,20 @@ build.
 
 ## What's in v0.1
 
-- **Home tab** — spinnable 3D body (drag to rotate, tap muscles). Tapping muscles filters your
-  workout list; tapping a workout highlights the muscles it works, darker red = more of the
-  workout's load on that muscle.
+- **Home tab** — spinnable 3D body (drag sideways to rotate, tap muscles). Tapping muscles filters
+  your workout list; tapping a workout highlights the muscles it works, darker red = more of the
+  workout's load on that muscle. If a plan is set up, its next session is shown at the top.
+- **3D body controls** — pinch (or the +/− buttons, or a trackpad pinch) to zoom in on small
+  muscles; while zoomed, drag up/down to move along the body and tap *reset* to zoom back out. At
+  normal zoom a vertical swipe on the model scrolls the page. *Hide body* collapses the model to a
+  one-line bar showing the current selection.
+- **Plan tab** — pick a curated training plan (Full Body, Upper / Lower, Push / Pull / Legs), the
+  days per week, a goal (Strength / Balanced / Endurance) and your training days; the workouts are
+  built for you. Shows this week and next week (done / missed / planned / rest), the next session
+  with a Start button, and a history summary: sessions per week against your target, sets per
+  muscle over the last 14 days, and recent sessions. Sessions rotate by what you have actually
+  done, so a skipped day never skips a session. Each plan session is a normal workout — edit it,
+  or swap any saved workout into the slot.
 - **Library tab** — all exercises grouped by muscle, with instructions, muscles used,
   1/2/6/10-rep PRs, total weight lifted and a personal popularity bar.
 - **Workouts tab** — view/edit/delete workouts. Create new ones by tapping muscles on the 3D
@@ -107,6 +105,14 @@ build.
 
 Data is stored in the browser's localStorage. "Load demo history" (Settings → Developer)
 fills ~6 weeks of fake sessions so PRs and popularity have something to show.
+
+## Plans: where the curation lives
+
+The plans are defined in [`src/data/plans.js`](src/data/plans.js): each template lists its sessions
+with a hand-picked exercise list, the allowed days-per-week options with default weekdays, and the
+three goal levels (a position on the same Strength↔Endurance scale the generator uses). Edit that
+file to change what a plan contains. Scheduling and the history summary are in
+[`src/logic/plan.js`](src/logic/plan.js).
 
 ## 3D body: base mesh + muscle-area overlays
 
@@ -138,6 +144,10 @@ needs Blender work to export/rename meshes.
   base model as above to improve the look).
 - Editing reps/weight in the workout *editor* applies to all sets of that exercise
   (per-set editing is available during an active workout).
+- Switching or removing a plan deletes the workouts that plan generated, including edits made to
+  them (history is kept).
+- Plan setup is deliberately limited to the curated choices; there is no build-your-own-split
+  screen yet, and the schedule only looks one week ahead.
 - "Scan & bring my data" replaces the receiving device's data with the sender's (it's a
   transfer, not a merge). Large histories fall back to file transfer.
 - Only one browser profile = one user; no accounts.

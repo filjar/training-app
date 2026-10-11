@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 
 const NEUTRAL = new THREE.Color(0x9aa1ad);
@@ -194,9 +194,17 @@ function buildBody(bodyType) {
  *  - highlights: { muscle: intensity 0..1 } shown light→dark red (workout load)
  *  - onToggle(muscle): called when a muscle is clicked/tapped
  *  - height: css height (default 340)
+ *  - summary: short text shown on the bar while the model is minimized
  */
-export default function BodyModel({ bodyType = 'woman', selected = [], highlights = {}, onToggle, height = 340 }) {
+const CAM_DIST = 2.75;
+const MAX_ZOOM = 3.5;
+// Half the world height the camera sees at zoom 1 (fov 40°).
+const VIEW_HALF = CAM_DIST * Math.tan((20 * Math.PI) / 180);
+
+export default function BodyModel({ bodyType = 'woman', selected = [], highlights = {}, onToggle, height = 340, summary }) {
   const mountRef = useRef(null);
+  const [zoomed, setZoomed] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const stateRef = useRef({});
   const propsRef = useRef({});
   propsRef.current = { selected, highlights, onToggle };
@@ -206,7 +214,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     const mount = mountRef.current;
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20);
-    camera.position.set(0, 0.05, 2.75);
+    camera.position.set(0, 0.05, CAM_DIST);
     camera.lookAt(0, 0, 0);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -227,6 +235,8 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     st.renderer = renderer;
     st.raycaster = new THREE.Raycaster();
     st.rotY = 0;
+    st.zoom = 1;
+    st.panY = 0;
 
     const resize = () => {
       const w = mount.clientWidth;
@@ -240,31 +250,68 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     const ro = new ResizeObserver(resize);
     ro.observe(mount);
 
-    // drag to rotate / click to select
-    let dragging = false;
-    let moved = 0;
-    let lastX = 0;
     const el = renderer.domElement;
-    el.style.touchAction = 'none';
     el.style.cursor = 'grab';
 
+    // Zoom moves the camera in; once zoomed, vertical drags pan up/down the
+    // body. At zoom 1 vertical swipes are left to the browser (touch-action:
+    // pan-y) so the page still scrolls when a finger lands on the model.
+    const applyView = () => {
+      const maxPan = VIEW_HALF * (1 - 1 / st.zoom);
+      st.panY = Math.max(-maxPan, Math.min(maxPan, st.panY));
+      camera.position.set(0, 0.05 + st.panY, CAM_DIST / st.zoom);
+      camera.lookAt(0, st.panY, 0);
+      const isZoomed = st.zoom > 1.01;
+      el.style.touchAction = isZoomed ? 'none' : 'pan-y';
+      setZoomed(isZoomed);
+    };
+    st.setZoom = (z) => {
+      st.zoom = Math.max(1, Math.min(MAX_ZOOM, z));
+      applyView();
+    };
+    applyView();
+
+    // drag to rotate (and pan when zoomed) / pinch to zoom / tap to select
+    const pointers = new Map();
+    let moved = 0;
+    let pinch = null; // { dist, zoom } at the start of a two-finger gesture
+    const pinchDist = () => {
+      const [a, b] = [...pointers.values()];
+      return Math.hypot(a.x - b.x, a.y - b.y);
+    };
+
     const onDown = (e) => {
-      dragging = true;
-      moved = 0;
-      lastX = e.clientX;
+      if (pointers.size === 0) moved = 0;
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       el.setPointerCapture(e.pointerId);
+      if (pointers.size === 2) {
+        pinch = { dist: pinchDist() || 1, zoom: st.zoom };
+        moved = Infinity; // a pinch never counts as a tap
+      }
     };
     const onMove = (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      moved += Math.abs(dx);
-      lastX = e.clientX;
-      st.rotY += dx * 0.012;
+      const p = pointers.get(e.pointerId);
+      if (!p) return;
+      const dx = e.clientX - p.x;
+      const dy = e.clientY - p.y;
+      p.x = e.clientX;
+      p.y = e.clientY;
+      if (pointers.size >= 2) {
+        if (pinch) st.setZoom(pinch.zoom * (pinchDist() / pinch.dist));
+        return;
+      }
+      moved += Math.abs(dx) + Math.abs(dy);
+      st.rotY += (dx * 0.012) / Math.sqrt(st.zoom);
       if (st.body) st.body.rotation.y = st.rotY;
+      if (st.zoom > 1.01) {
+        st.panY += (dy * 2 * VIEW_HALF) / (st.zoom * (mount.clientHeight || 1));
+        applyView();
+      }
     };
     const onUp = (e) => {
-      if (!dragging) return;
-      dragging = false;
+      if (!pointers.delete(e.pointerId)) return;
+      if (pointers.size < 2) pinch = null;
+      if (pointers.size > 0 || e.type === 'pointercancel') return;
       if (moved < 6 && propsRef.current.onToggle && st.muscles) {
         const rect = el.getBoundingClientRect();
         const p = new THREE.Vector2(
@@ -277,13 +324,22 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
         if (hits.length) propsRef.current.onToggle(hits[0].object.userData.muscle);
       }
     };
+    // Trackpad pinch arrives as ctrl+wheel; plain wheel is left alone so the
+    // page keeps scrolling.
+    const onWheel = (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      st.setZoom(st.zoom * Math.exp(-e.deltaY * 0.01));
+    };
     el.addEventListener('pointerdown', onDown);
     el.addEventListener('pointermove', onMove);
     el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
+    el.addEventListener('wheel', onWheel, { passive: false });
 
     let raf;
     const loop = () => {
-      renderer.render(scene, camera);
+      if (mount.clientHeight) renderer.render(scene, camera); // skip while minimized
       raf = requestAnimationFrame(loop);
     };
     loop();
@@ -294,6 +350,8 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
       el.removeEventListener('pointerdown', onDown);
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
+      el.removeEventListener('wheel', onWheel);
       renderer.dispose();
       mount.removeChild(el);
     };
@@ -322,10 +380,35 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     applyColors(stateRef.current, propsRef.current);
   }, [selected, highlights]);
 
+  const zoomBy = (f) => stateRef.current.setZoom?.(stateRef.current.zoom * f);
+
   return (
-    <div className="body-model-wrap">
-      <div ref={mountRef} style={{ width: '100%', height }} />
-      <div className="body-model-hint">drag to spin · tap a muscle</div>
+    <div className={`body-model-wrap ${collapsed ? 'collapsed' : ''}`}>
+      <div className="body-model-stage">
+        <div ref={mountRef} style={{ width: '100%', height: collapsed ? 0 : height, overflow: 'hidden' }} />
+        {!collapsed && (
+          <>
+            <div className="body-model-zoom">
+              <button className="icon-btn" title="Zoom in" onClick={() => zoomBy(1.4)}>+</button>
+              <button className="icon-btn" title="Zoom out" disabled={!zoomed} onClick={() => zoomBy(1 / 1.4)}>−</button>
+              {zoomed && (
+                <button className="icon-btn" title="Reset zoom" onClick={() => stateRef.current.setZoom(1)}>reset</button>
+              )}
+            </div>
+            {!zoomed && <div className="body-model-hint">drag to spin · pinch to zoom · tap a muscle</div>}
+          </>
+        )}
+      </div>
+      <button className="body-model-toggle" onClick={() => setCollapsed(!collapsed)}>
+        {collapsed ? (
+          <>
+            <span className="body-model-summary">{summary || 'Body model hidden'}</span>
+            <span>Show body ▾</span>
+          </>
+        ) : (
+          <span>Hide body ▴</span>
+        )}
+      </button>
     </div>
   );
 }

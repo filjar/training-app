@@ -73,6 +73,19 @@ export function suggestWeight(exercise, targetReps, historySets) {
 
 const lerp = (a, b, t) => a + (b - a) * t;
 
+// One workout entry for an exercise at strength(0)..endurance(1) position t:
+// reps/sets interpolate between the exercise's two ends, weight comes from history.
+export function prescribe(ex, t, setsBy) {
+  const reps = Math.round(lerp(ex.strength.reps, ex.endurance.reps, t));
+  const nSets = Math.round(lerp(ex.strength.sets, ex.endurance.sets, t));
+  const weight = suggestWeight(ex, reps, setsBy[ex.id]);
+  return {
+    exerciseId: ex.id,
+    rest: Math.round(lerp(150, 60, t) / 15) * 15,
+    sets: Array.from({ length: nSets }, () => ({ reps, weight })),
+  };
+}
+
 // Generate a workout from selected muscles and a strength(0)..endurance(1) slider value.
 export function generateWorkout(muscles, t, history) {
   const setsBy = completedSetsByExercise(history);
@@ -93,18 +106,7 @@ export function generateWorkout(muscles, t, history) {
   // Big compound lifts first.
   chosen.sort((a, b) => b.defaultWeight - a.defaultWeight);
 
-  const exercises = chosen.slice(0, 8).map((ex) => {
-    const reps = Math.round(lerp(ex.strength.reps, ex.endurance.reps, t));
-    const nSets = Math.round(lerp(ex.strength.sets, ex.endurance.sets, t));
-    const weight = suggestWeight(ex, reps, setsBy[ex.id]);
-    return {
-      exerciseId: ex.id,
-      rest: Math.round(lerp(150, 60, t) / 15) * 15,
-      sets: Array.from({ length: nSets }, () => ({ reps, weight })),
-    };
-  });
-
-  return exercises;
+  return chosen.slice(0, 8).map((ex) => prescribe(ex, t, setsBy));
 }
 
 // How hard each muscle is worked in a workout, normalized so the most-worked muscle = 1.
