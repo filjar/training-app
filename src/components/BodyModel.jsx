@@ -27,8 +27,12 @@ const SOFTNESS = {
   Abs: 0.35, Obliques: 0.4, Lats: 0.4, Traps: 0.3, 'Lower Back': 0.3, Shoulders: 0.3,
 };
 // Soft-tissue wobble: a damped spring that the body's angular acceleration
-// kicks. About 2 wobbles per second, settled in roughly half a second.
-const WOBBLE = { stiffness: 180, damping: 9.5, gain: 0.08, max: 0.1, reach: 0.12 };
+// kicks. `gain` is how hard a change in spin speed kicks it, `max` caps the lag
+// (radians) and `reach` is the distance from the body's axis beyond which the
+// shift stops growing — so the largest shift is max × reach ≈ 6 cm on the
+// body. That is exaggerated on purpose: at normal zoom a centimetre is only
+// about two pixels, which reads as no movement at all.
+const WOBBLE = { stiffness: 120, damping: 5, gain: 1.0, max: 0.6, reach: 0.1 };
 const SPIN_FRICTION = 3.5; // how quickly a flicked body eases to a stop (1/s)
 
 const reducedMotion = () =>

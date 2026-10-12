@@ -254,8 +254,9 @@ thighs.
   change, the bigger the movement.
 - **Where:** strongest on chest, glutes, thighs, calves and upper arms; a little on the abdomen
   and back; none on head, hands, feet, knees and elbows.
-- **How much:** visible but small — at most about a centimetre on the body at the hardest flick,
-  settled within roughly half a second. It should read as weight, not as jelly.
+- **How much:** clearly visible at normal zoom. The first version followed "at most about a
+  centimetre", which is about two pixels on a phone and could not be seen. It is now up to about
+  6 cm on the body at the hardest flick, 2–3 cm for an ordinary one, settling in about a second.
 - **It must not get in the way:** outlines move with the surface; a tap is resolved against the
   body at rest, so wobble never changes which muscle is picked; no movement at all while the body
   is still.
@@ -273,8 +274,8 @@ Ordered by how much each affects everyday use.
 2. **Region accuracy.** Borders are plausible but simplified: the glutes region is wide, the
    obliques are boxy. Forearms, front shins, inner thighs, neck, hands and feet are not
    selectable.
-3. **Inertia tuning.** The amounts in the spec (about a centimetre, half a second) are first
-   values and need judging by hand on a phone.
+3. **Inertia tuning.** The amounts are deliberately exaggerated to be visible and need judging
+   by hand on a phone; they are the `WOBBLE` and `SOFTNESS` values in the body component.
 4. **Feedback when tapping.** There is no hover highlight on laptop and no name shown at the
    point of a tap; the chips cover naming.
 5. **Download size.** Each body is about 1.7 MB. Fine on Wi-Fi; worth shrinking if first load on
