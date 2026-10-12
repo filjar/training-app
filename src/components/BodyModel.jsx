@@ -29,10 +29,11 @@ const SOFTNESS = {
 // Soft-tissue wobble: a damped spring that the body's angular acceleration
 // kicks. `gain` is how hard a change in spin speed kicks it, `max` caps the lag
 // (radians) and `reach` is the distance from the body's axis beyond which the
-// shift stops growing — so the largest shift is max × reach ≈ 6 cm on the
-// body. That is exaggerated on purpose: at normal zoom a centimetre is only
-// about two pixels, which reads as no movement at all.
-const WOBBLE = { stiffness: 120, damping: 5, gain: 1.0, max: 0.6, reach: 0.1 };
+// shift stops growing. Tuned to be firm, as on flexed muscle: an ordinary flick
+// shifts soft areas well under a centimetre, with one small rebound, settled
+// in under half a second. (Softer settings read as rubber; a tenth of this
+// can't be seen at all.)
+const WOBBLE = { stiffness: 400, damping: 20, gain: 0.7, max: 0.2, reach: 0.1 };
 const SPIN_FRICTION = 3.5; // how quickly a flicked body eases to a stop (1/s)
 
 const reducedMotion = () =>
