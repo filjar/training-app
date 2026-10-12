@@ -1,6 +1,6 @@
-# Training App — v0.1
+# Training App
 
-First working prototype of the workout app described in [description.md](Description.md).
+A workout planning and tracking app, described in [Description.md](Description.md).
 
 ## Run it
 
@@ -73,35 +73,43 @@ your laptop. Forcing **Phone** on a wide screen draws a simulated phone bezel to
 size. This whole section is gated behind `import.meta.env.DEV`, so it never appears in the deployed
 build.
 
-## What's in v0.1
+## What's in the app
 
-- **Home tab** — spinnable 3D body (drag sideways to rotate, tap muscles). Tapping muscles filters
-  your workout list; tapping a workout highlights the muscles it works, darker red = more of the
-  workout's load on that muscle. If a plan is set up, its next session is shown at the top.
-- **3D body controls** — pinch (or the +/− buttons, or a trackpad pinch) to zoom in on small
-  muscles; while zoomed, drag up/down to move along the body and tap *reset* to zoom back out. At
-  normal zoom a vertical swipe on the model scrolls the page. *Hide body* collapses the model to a
-  one-line bar showing the current selection.
-- **Plan tab** — pick a curated training plan (Full Body, Upper / Lower, Push / Pull / Legs), the
+The design behind the screens is in [Design-navigation.md](Design-navigation.md).
+
+- **Today** — the landing page. Shows today's planned session with a front-and-back picture of
+  the muscles it trains and one Start button, this week at a glance, and "Start a custom workout",
+  which offers two ways: from your library, or build a new one.
+- **Plan** — pick a curated training plan (Full Body, Upper / Lower, Push / Pull / Legs), the
   days per week, a goal (Strength / Balanced / Endurance) and your training days; the workouts are
-  built for you. Shows this week and next week (done / missed / planned / rest), the next session
-  with a Start button, and a history summary: sessions per week against your target, sets per
-  muscle over the last 14 days, and recent sessions. Sessions rotate by what you have actually
-  done, so a skipped day never skips a session. Each plan session is a normal workout — edit it,
-  or swap any saved workout into the slot.
-- **Library tab** — all exercises grouped by muscle, with instructions, muscles used,
-  1/2/6/10-rep PRs, total weight lifted and a personal popularity bar.
-- **Workouts tab** — view/edit/delete workouts. Create new ones by tapping muscles on the 3D
-  model to browse exercises, or select muscles + a Strength↔Endurance slider and hit Generate
-  (reps/sets interpolate per exercise; weights come from your PR history via estimated 1RM, or
-  exercise defaults).
+  built for you. Shows this week and next week (done / missed / planned / rest), the next session,
+  and a history summary: sessions per week against your target, sets per muscle over the last 14
+  days, and recent sessions. Sessions rotate by what you have actually done, so a skipped day
+  never skips a session. Each plan session is a normal workout — edit it, or swap any saved
+  workout into the slot.
+- **Library** — two halves. *Workouts*: your saved workouts, filtered by tapping muscles on the 3D
+  body or the muscle chips; tap one to preview it. *Exercises*: every exercise grouped by muscle,
+  with instructions, muscles used, 1/2/6/10-rep PRs, total weight lifted and a personal
+  popularity bar.
+- **Workout builder** — pick muscles on the 3D body, then either generate a workout with the
+  Strength ↔ Endurance slider (reps and sets interpolate per exercise; weights come from your PR
+  history via estimated 1RM, or exercise defaults) or choose the exercises yourself.
+- **Workout preview** — where every workout goes before you start it: the muscles it loads (darker
+  red = more), its exercises, then Start or Edit. A workout you just built is not saved yet.
 - **During a workout** — tap a set to mark it done (green), edit reps/weight on the fly,
   +/− sets, drag exercises to reorder, and a pull-out rest panel that counts down the active
   exercise's rest (or counts up as a plain stopwatch).
+- **Finish summary** — time, sets, weight lifted and new rep PRs, and for a workout that isn't in
+  your library, "Save this workout?".
+- **3D body controls** — drag sideways to spin (a flick keeps it turning, and the muscles lag and
+  settle as it does); pinch, the +/− buttons or a trackpad pinch to zoom; while zoomed, drag
+  up/down to move along the body; *Hide body* collapses it to a one-line bar. At normal zoom a
+  vertical swipe on the body scrolls the page.
 - **Settings** — body type for the 3D model (woman default / man), open-on-phone QR + install,
   JSON export/import for moving data between devices without a server, reset. A dev-only
   "Developer (preview build)" section (layout preview + demo-history loader) shows only under
   `npm run dev`.
+- **Colour** — teal is for controls; red is only ever a muscle.
 
 Data is stored in the browser's localStorage. "Load demo history" (Settings → Developer)
 fills ~6 weeks of fake sessions so PRs and popularity have something to show.
@@ -117,7 +125,7 @@ file to change what a plan contains. Scheduling and the history summary are in
 ## 3D body: MakeHuman model with generated muscle regions
 
 The 3D body ([`src/components/BodyModel.jsx`](src/components/BodyModel.jsx)) is a realistic human
-mesh with the 14 muscle groups marked directly on its surface.
+mesh with the 13 muscle groups marked directly on its surface.
 
 - **The models** are `public/models/woman.glb` and `public/models/man.glb` (about 1.7 MB each),
   generated with [MakeHuman](http://www.makehumancommunity.org/) through its Blender add-on MPFB.
@@ -131,6 +139,9 @@ mesh with the 14 muscle groups marked directly on its surface.
   a border weight by rule — which part of the skeleton it follows, where it sits between body
   landmarks (shoulder, elbow, hip, knee…), and how far round the torso or limb it is. The two
   strongest muscles at each vertex are stored in the model's `_MUSCLE` / `_MUSCLE2` attributes.
+- **Inertia:** spinning has momentum, and a spring kicked by changes in spin speed makes soft
+  tissue trail and settle (`WOBBLE` and `SOFTNESS` in the component). It is switched off when the
+  device asks for reduced motion.
 - **In the app** a small shader fills a selected muscle and draws every muscle's outline where the
   interpolated weight crosses 0.5, which gives smooth borders that don't follow the mesh's
   triangles. A tap is resolved against the same weights, and a tap just outside a muscle still
@@ -152,6 +163,7 @@ blender -b --python scripts/body/build_body.py -- --type man --out public/models
 `--preview` writes a four-view picture with each region in its own colour, which is the quickest
 way to check a change. In [`scripts/body/build_body.py`](scripts/body/build_body.py):
 
+- `ARM_ANGLE` sets how far the arms hang out from the body.
 - `BODY_TYPES` holds the MakeHuman sliders and detail shapes for each body (gender, muscle,
   weight, proportions, per-limb muscle…). All MakeHuman bodies share one mesh layout, so a new
   body type is one more entry there.
@@ -159,10 +171,11 @@ way to check a change. In [`scripts/body/build_body.py`](scripts/body/build_body
   sculpting. `BELLY` sets how far each muscle is pushed out; add `--plain` to the command to
   preview the bare shape without region colours.
 
-## Known limitations (v0.1)
+## Known limitations
 
 - Muscle regions on the 3D body are generated by rule, so their borders are approximate rather
-  than anatomically exact, and front shins, inner thighs, neck, hands and feet are not selectable.
+  than anatomically exact, and forearms, front shins, inner thighs, neck, hands and feet are not
+  selectable. Forearms was removed as a muscle group because nearly every exercise uses them.
 - Editing reps/weight in the workout *editor* applies to all sets of that exercise
   (per-set editing is available during an active workout).
 - Switching or removing a plan deletes the workouts that plan generated, including edits made to

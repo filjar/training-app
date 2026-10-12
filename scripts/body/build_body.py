@@ -29,9 +29,10 @@ from bl_ext.blender_org.mpfb.services.locationservice import LocationService
 from bl_ext.blender_org.mpfb.services.targetservice import TargetService
 
 MUSCLES = [
-    None, 'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps', 'Forearms', 'Abs',
+    None, 'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps', 'Abs',
     'Obliques', 'Lats', 'Lower Back', 'Glutes', 'Quads', 'Hamstrings', 'Calves',
 ]
+# The forearm is still shaped as a muscle, but it is not a selectable group.
 ID = {name: i for i, name in enumerate(MUSCLES) if name}
 
 # MakeHuman sliders per body: 'macros' are the main sliders (0..1), 'targets'
@@ -195,6 +196,35 @@ def add_part_groups(obj):
             group.add([idx], min(1.0, w), 'REPLACE')
 
 
+def lower_arms(obj, lm):
+    """Swings the arms down about the shoulder joints to ARM_ANGLE from vertical.
+
+    Each vertex turns by the angle times how much it belongs to the arm, which
+    bends the shoulder smoothly. The elbow and hand landmarks move with it.
+    """
+    names = {g.index for g in obj.vertex_groups if g.name in ('part:upperarm', 'part:forearm', 'part:hand')}
+    sh, el = lm['l-shoulder'], lm['l-elbow']
+    current = math.atan2(el.x - sh.x, sh.z - el.z)      # arm's angle out from straight down
+    turn = current - math.radians(ARM_ANGLE)
+
+    def swing(co, pivot, angle):
+        dx, dz = co.x - pivot.x, co.z - pivot.z
+        c, s_ = math.cos(angle), math.sin(angle)
+        return Vector((pivot.x + dx * c - dz * s_, co.y, pivot.z + dx * s_ + dz * c))
+
+    for v in obj.data.vertices:
+        w = min(1.0, sum(g.weight for g in v.groups if g.group in names))
+        if w <= 0:
+            continue
+        side = 1 if v.co.x >= 0 else -1
+        pivot = Vector((sh.x * side, sh.y, sh.z))
+        # ease the blend so the shoulder cap follows the arm a little later than the arm itself
+        v.co = swing(v.co, pivot, -side * turn * smoothstep(0.0, 1.0, w))
+    for name in ('l-elbow', 'l-hand'):
+        lm[name] = swing(lm[name], sh, -turn)
+    obj.data.update()
+
+
 def read_part_groups(obj):
     names = {g.index: g.name[5:] for g in obj.vertex_groups if g.name.startswith('part:')}
     return [{names[g.group]: g.weight for g in v.groups if g.group in names} for v in obj.data.vertices]
@@ -229,6 +259,7 @@ def limb_coords(p, a, b):
 # zone the app uses to draw a smooth outline.
 PRIORITY = ['Shoulders', 'Chest', 'Abs', 'Traps', 'Lower Back', 'Glutes', 'Biceps', 'Triceps',
             'Forearms', 'Quads', 'Hamstrings', 'Calves', 'Obliques', 'Lats']
+ARM_ANGLE = 27  # degrees the arms hang out from straight down
 GAP = 0.004
 EDGE = 0.015
 
@@ -264,7 +295,10 @@ def classify(obj, lm, parts, belly):
     AU, AF = (el - sh).length, (wr - el).length
     TL, SL = (kn - hip).length, (an - kn).length
     FWD, UP = Vector((0, -1, 0)), Vector((0, 0, 1))
-    BICEPS_DIR = (FWD + UP * 0.45).normalized()
+    # 'Up' as seen from the arm: straight out from the bone, on its top side.
+    arm_axis = (el - sh).normalized()
+    ARM_UP = (UP - arm_axis * UP.dot(arm_axis)).normalized()
+    BICEPS_DIR = (FWD + ARM_UP * 0.4).normalized()
     NRM = 0.08                       # metres per unit of surface-normal threshold
     R_ARM, R_THIGH, R_SHIN, R_TORSO = 0.045, 0.08, 0.05, 0.11   # metres per unit of 'how far round the limb'
 
@@ -300,7 +334,7 @@ def classify(obj, lm, parts, belly):
         f = {}
         # deltoid: a ball around the shoulder joint, minus the armpit
         f['Shoulders'] = min(part('upperarm', 'torso'), (0.27 - (p - sh).length / L) * L, (xs - 0.86) * SW,
-                             (r_arm.dot(UP) + 0.35) * R_ARM, (0.42 - t_arm) * AU)
+                             (r_arm.dot(ARM_UP) + 0.35) * R_ARM, (0.42 - t_arm) * AU)
         f['Biceps'] = min(part('upperarm'), band(t_arm, 0.3, 0.97, AU), (arm_front - 0.25) * R_ARM)
         f['Triceps'] = min(part('upperarm'), band(t_arm, 0.3, 0.97, AU), (-0.12 - arm_front) * R_ARM)
         f['Forearms'] = min(part('forearm'), band(t_fore, 0.02, 0.88, AF))
@@ -338,7 +372,7 @@ def classify(obj, lm, parts, belly):
 
         # Keep the two strongest muscles here, so both sides of a shared border
         # know exactly where it runs.
-        ranked = sorted(f, key=f.get, reverse=True)[:2]
+        ranked = sorted((name for name in f if name in ID), key=f.get, reverse=True)[:2]
         pairs = [(ID[name], min(1.0, max(0.0, 0.5 + f[name] / (2 * EDGE)))) for name in ranked]
         out[v.index] = [(m, wt) if wt > 0 else (0, 0.0) for m, wt in pairs]
 
@@ -463,6 +497,7 @@ def main():
     neutralise(obj)
     lm = landmarks(obj)
     add_part_groups(obj)
+    lower_arms(obj, lm)
     strip_helpers(obj)
     subdivide(obj)
     belly = {**BELLY, **BODY_TYPES[args.type].get('belly', {})}

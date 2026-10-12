@@ -6,7 +6,7 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 // Muscle ids baked into the models' `_MUSCLE` vertex attribute, in the order
 // scripts/body/build_body.py writes them (0 = not a muscle).
 const MUSCLES = [
-  null, 'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps', 'Forearms', 'Abs',
+  null, 'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps', 'Abs',
   'Obliques', 'Lats', 'Lower Back', 'Glutes', 'Quads', 'Hamstrings', 'Calves',
 ];
 
@@ -14,11 +14,25 @@ const MUSCLES = [
 // two neighbouring muscles share a channel. Interpolating the channels
 // separately keeps every outline clean even where two muscles meet.
 const CHANNEL = {
-  Shoulders: 0, Forearms: 0, Abs: 0, 'Lower Back': 0, Quads: 0, Calves: 0,
+  Shoulders: 0, Abs: 0, 'Lower Back': 0, Quads: 0, Calves: 0,
   Chest: 1, Traps: 1, Biceps: 1, Glutes: 1,
   Triceps: 2, Obliques: 2, Hamstrings: 2,
   Lats: 3,
 };
+
+// How much each muscle's soft tissue trails behind when the body is spun
+// (0 = rigid). Everything that isn't a muscle region stays rigid.
+const SOFTNESS = {
+  Chest: 0.9, Glutes: 1, Quads: 0.7, Hamstrings: 0.8, Calves: 0.7, Biceps: 0.6, Triceps: 0.7,
+  Abs: 0.35, Obliques: 0.4, Lats: 0.4, Traps: 0.3, 'Lower Back': 0.3, Shoulders: 0.3,
+};
+// Soft-tissue wobble: a damped spring that the body's angular acceleration
+// kicks. About 2 wobbles per second, settled in roughly half a second.
+const WOBBLE = { stiffness: 180, damping: 9.5, gain: 0.08, max: 0.1, reach: 0.12 };
+const SPIN_FRICTION = 3.5; // how quickly a flicked body eases to a stop (1/s)
+
+const reducedMotion = () =>
+  typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 
 const SKIN = new THREE.Color(0xc4bcb4); // the body surface
 const OUTLINE = new THREE.Color(0x6f6a66); // border of an unselected muscle
@@ -26,7 +40,7 @@ const SELECTED = new THREE.Color(0xe0452f);
 const HL_LIGHT = new THREE.Color(0xf0a596);
 const HL_DARK = new THREE.Color(0x8f1c0a);
 
-const BODY_HEIGHT = 1.86; // world units the model is scaled to, to fill the view
+const BODY_HEIGHT = 1.94; // world units the model is scaled to, to fill the view
 // A tap that lands just outside a muscle still selects it if one is this close.
 const TAP_SLOP = 0.04;
 
@@ -67,9 +81,29 @@ function loadBody(bodyType) {
       geo.deleteAttribute('_muscle2');
       geo.setAttribute('aMuscle', new THREE.BufferAttribute(ids, 4));
       geo.setAttribute('aWeight', new THREE.BufferAttribute(weights, 4));
+      const soft = new Float32Array(n);
+      for (let i = 0; i < n * 4; i++) {
+        if (ids[i]) soft[i >> 2] = Math.max(soft[i >> 2], SOFTNESS[MUSCLES[ids[i]]] * weights[i]);
+      }
+      geo.setAttribute('aSoft', new THREE.BufferAttribute(soft, 1));
       return { geo, ids, weights };
     });
   return modelCache[bodyType];
+}
+
+// Studio lighting: a low environment for fill, a strong key light from the
+// upper side so muscle definition casts shading, and a rim light from behind.
+function addLights(scene, renderer) {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.3;
+  pmrem.dispose();
+  const key = new THREE.DirectionalLight(0xffffff, 2.3);
+  key.position.set(2.6, 3.2, 2.4);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xdde6ff, 0.9);
+  rim.position.set(-2.5, 2, -3);
+  scene.add(rim);
 }
 
 // Body material: standard shading, with each muscle region filled from a
@@ -78,20 +112,32 @@ function loadBody(bodyType) {
 // following the mesh's triangles.
 function makeBodyMaterial() {
   const palette = MUSCLES.map(() => new THREE.Vector4(0, 0, 0, 0)); // rgb + fill strength
+  const lag = { value: 0 }; // how far (radians) soft tissue currently trails the body's spin
   const material = new THREE.MeshStandardMaterial({ color: SKIN, roughness: 0.7, metalness: 0 });
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uPalette = { value: palette };
+    shader.uniforms.uLag = lag;
     shader.uniforms.uOutline = { value: OUTLINE };
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', `#include <common>
         attribute vec4 aMuscle;
         attribute vec4 aWeight;
+        attribute float aSoft;
+        uniform float uLag;
         uniform vec4 uPalette[${MUSCLES.length}];
         varying vec4 vWeight;
         varying vec4 vTint[4];`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
         vWeight = aWeight;
-        for (int c = 0; c < 4; c++) vTint[c] = uPalette[int(aMuscle[c] + 0.5)] * aWeight[c];`);
+        for (int c = 0; c < 4; c++) vTint[c] = uPalette[int(aMuscle[c] + 0.5)] * aWeight[c];
+        // Soft tissue turns a little less (or more) than the skeleton about the
+        // body's vertical axis; the shift is capped so far-out limbs don't fly.
+        float r = length(transformed.xz);
+        if (r > 1e-4) {
+          float a = uLag * aSoft * min(r, ${WOBBLE.reach.toFixed(3)}) / r;
+          float ca = cos(a), sa = sin(a);
+          transformed.xz = mat2(ca, -sa, sa, ca) * transformed.xz;
+        }`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform vec3 uOutline;
@@ -109,6 +155,7 @@ function makeBodyMaterial() {
         }`);
   };
   material.userData.palette = palette;
+  material.userData.lag = lag;
   return material;
 }
 
@@ -153,16 +200,17 @@ function muscleAt(body, face, point) {
  *  - onToggle(muscle): called when a muscle is clicked/tapped
  *  - height: css height (default 340)
  *  - summary: short text shown on the bar while the model is minimized
+ *  - defaultCollapsed: start minimized
  */
 const CAM_DIST = 2.75;
 const MAX_ZOOM = 3.5;
 // Half the world height the camera sees at zoom 1 (fov 40°).
 const VIEW_HALF = CAM_DIST * Math.tan((20 * Math.PI) / 180);
 
-export default function BodyModel({ bodyType = 'woman', selected = [], highlights = {}, onToggle, height = 340, summary }) {
+export default function BodyModel({ bodyType = 'woman', selected = [], highlights = {}, onToggle, height = 340, summary, defaultCollapsed = false }) {
   const mountRef = useRef(null);
   const [zoomed, setZoomed] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   const [loaded, setLoaded] = useState(false);
   const [touched, setTouched] = useState(false); // the hint goes away once the model has been used
   const stateRef = useRef({});
@@ -181,18 +229,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     mount.appendChild(renderer.domElement);
 
-    // Studio lighting: a low environment for fill, a strong key light from the
-    // upper side so muscle definition casts shading, and a rim light from behind.
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    scene.environmentIntensity = 0.3;
-    pmrem.dispose();
-    const key = new THREE.DirectionalLight(0xffffff, 2.3);
-    key.position.set(2.6, 3.2, 2.4);
-    scene.add(key);
-    const rim = new THREE.DirectionalLight(0xdde6ff, 0.9);
-    rim.position.set(-2.5, 2, -3);
-    scene.add(rim);
+    addLights(scene, renderer);
 
     const st = stateRef.current;
     st.scene = scene;
@@ -200,6 +237,7 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     st.renderer = renderer;
     st.raycaster = new THREE.Raycaster();
     st.rotY = 0;
+    st.spin = 0; // angular velocity (rad/s) the body keeps after a flick
     st.zoom = 1;
     st.panY = 0;
 
@@ -240,6 +278,8 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     const pointers = new Map();
     let moved = 0;
     let pinch = null; // { dist, zoom } at the start of a two-finger gesture
+    let dragSpin = 0; // spin speed of the current drag, smoothed
+    let lastMoveAt = 0;
     const pinchDist = () => {
       const [a, b] = [...pointers.values()];
       return Math.hypot(a.x - b.x, a.y - b.y);
@@ -247,6 +287,9 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
 
     const onDown = (e) => {
       if (pointers.size === 0) moved = 0;
+      st.spin = 0; // touching the body stops it
+      dragSpin = 0;
+      lastMoveAt = e.timeStamp;
       setTouched(true);
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       el.setPointerCapture(e.pointerId);
@@ -267,8 +310,11 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
         return;
       }
       moved += Math.abs(dx) + Math.abs(dy);
-      st.rotY += (dx * 0.012) / Math.sqrt(st.zoom);
-      if (st.mesh) st.mesh.rotation.y = st.rotY;
+      const turn = (dx * 0.012) / Math.sqrt(st.zoom);
+      st.rotY += turn;
+      const dt = Math.max(1, e.timeStamp - lastMoveAt) / 1000;
+      dragSpin = dragSpin * 0.6 + (turn / dt) * 0.4;
+      lastMoveAt = e.timeStamp;
       if (st.zoom > 1.01) {
         st.panY += (dy * 2 * VIEW_HALF) / (st.zoom * (mount.clientHeight || 1));
         applyView();
@@ -278,6 +324,8 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
       if (!pointers.delete(e.pointerId)) return;
       if (pointers.size < 2) pinch = null;
       if (pointers.size > 0 || e.type === 'pointercancel') return;
+      // Let go mid-swipe and the body keeps turning; a pause before release cancels it.
+      if (moved >= 6 && e.timeStamp - lastMoveAt < 80) st.spin = Math.max(-14, Math.min(14, dragSpin));
       if (moved < 6 && propsRef.current.onToggle && st.body) {
         const rect = el.getBoundingClientRect();
         const p = new THREE.Vector2(
@@ -305,7 +353,36 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
     el.addEventListener('wheel', onWheel, { passive: false });
 
     let raf;
-    const loop = () => {
+    let lastFrame = performance.now();
+    let lastRot = 0;
+    let lastOmega = 0;
+    let lag = 0;
+    let lagVel = 0;
+    const still = reducedMotion();
+    const loop = (now = performance.now()) => {
+      const dt = Math.min(0.05, Math.max(0.001, (now - lastFrame) / 1000));
+      lastFrame = now;
+
+      // spin momentum
+      if (pointers.size === 0 && Math.abs(st.spin) > 0.02) {
+        st.rotY += st.spin * dt;
+        st.spin *= Math.exp(-(still ? 12 : SPIN_FRICTION) * dt);
+      } else if (pointers.size === 0) st.spin = 0;
+
+      // soft tissue: a spring kicked by changes in how fast the body turns
+      const omega = (st.rotY - lastRot) / dt;
+      lastRot = st.rotY;
+      if (!still) {
+        lagVel += (-WOBBLE.stiffness * lag - WOBBLE.damping * lagVel) * dt - (omega - lastOmega) * WOBBLE.gain;
+        lag = Math.max(-WOBBLE.max, Math.min(WOBBLE.max, lag + lagVel * dt));
+        if (Math.abs(lag) < 1e-4 && Math.abs(lagVel) < 1e-3) { lag = 0; lagVel = 0; }
+      }
+      lastOmega = omega;
+
+      if (st.mesh) {
+        st.mesh.rotation.y = st.rotY;
+        st.mesh.material.userData.lag.value = lag;
+      }
       if (mount.clientHeight) renderer.render(scene, camera); // skip while minimized
       raf = requestAnimationFrame(loop);
     };
@@ -384,12 +461,11 @@ export default function BodyModel({ bodyType = 'woman', selected = [], highlight
   );
 }
 
-function applyColors(st, { selected, highlights }) {
-  if (!st.mesh) return;
+// Sets each muscle's fill: selected (solid red), load-shaded (light→dark red
+// by intensity), or idle (no fill, just the outline).
+function setPalette(material, selected, highlights) {
   const sel = new Set(selected);
-  // Per muscle: selected (solid red), load-shaded (light→dark red by
-  // intensity), or idle (no fill, just the outline).
-  st.mesh.material.userData.palette.forEach((slot, id) => {
+  material.userData.palette.forEach((slot, id) => {
     const name = MUSCLES[id];
     if (name && sel.has(name)) slot.set(SELECTED.r, SELECTED.g, SELECTED.b, 1);
     else if (name && highlights[name] != null) {
@@ -397,4 +473,69 @@ function applyColors(st, { selected, highlights }) {
       slot.set(c.r, c.g, c.b, 1);
     } else slot.set(0, 0, 0, 0);
   });
+}
+
+function applyColors(st, { selected, highlights }) {
+  if (st.mesh) setPalette(st.mesh.material, selected, highlights);
+}
+
+// ---- still pictures -------------------------------------------------------
+// A front-and-back picture of the body shaded by workout load, for places
+// that show a workout without needing the interactive model.
+
+let pictureKit = null;
+const pictureCache = new Map();
+
+async function renderBodyPicture(bodyType, highlights, width, height) {
+  const key = `${bodyType}|${width}x${height}|${JSON.stringify(highlights)}`;
+  if (pictureCache.has(key)) return pictureCache.get(key);
+  const body = await loadBody(bodyType);
+  if (!pictureKit) {
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(2);
+    const scene = new THREE.Scene();
+    addLights(scene, renderer);
+    const camera = new THREE.PerspectiveCamera(40, 1, 0.1, 20);
+    camera.position.set(0, 0.05, CAM_DIST);
+    camera.lookAt(0, 0, 0);
+    const mesh = new THREE.Mesh(body.geo, makeBodyMaterial());
+    scene.add(mesh);
+    pictureKit = { renderer, scene, camera, mesh };
+  }
+  const { renderer, scene, camera, mesh } = pictureKit;
+  renderer.setSize(width, height, false);
+  mesh.geometry = body.geo;
+  setPalette(mesh.material, [], highlights);
+  camera.aspect = width / 2 / height;
+  camera.updateProjectionMatrix();
+  renderer.setScissorTest(true);
+  [0, Math.PI].forEach((turn, i) => {
+    renderer.setViewport((i * width) / 2, 0, width / 2, height);
+    renderer.setScissor((i * width) / 2, 0, width / 2, height);
+    mesh.rotation.y = turn;
+    renderer.render(scene, camera);
+  });
+  const url = renderer.domElement.toDataURL('image/png');
+  pictureCache.set(key, url);
+  return url;
+}
+
+/**
+ * Non-interactive front + back view of the body.
+ * props: bodyType, highlights ({ muscle: 0..1 }), height (css px; width is 1.1× that)
+ */
+export function BodyPicture({ bodyType = 'woman', highlights = {}, height = 150 }) {
+  const [url, setUrl] = useState(null);
+  const width = Math.round(height * 1.1);
+  const key = JSON.stringify(highlights);
+  useEffect(() => {
+    let cancelled = false;
+    renderBodyPicture(bodyType, highlights, width, height).then((u) => { if (!cancelled) setUrl(u); });
+    return () => { cancelled = true; };
+  }, [bodyType, key, width, height]);
+  return (
+    <div className="body-picture" style={{ width, height }}>
+      {url && <img src={url} width={width} height={height} alt="Muscles this workout trains, front and back" />}
+    </div>
+  );
 }

@@ -4,7 +4,7 @@ import { MUSCLE_GROUPS, exerciseById } from '../data/exercises.js';
 import { PLAN_TEMPLATES, GOALS, WEEKDAYS, planTemplateById } from '../data/plans.js';
 import { createPlan, planSchedule, recentSessions, weekSummaries, muscleSets } from '../logic/plan.js';
 import { fmtTotal } from '../logic/stats.js';
-import { WorkoutEditor } from './WorkoutsTab.jsx';
+import WorkoutEditor from './WorkoutEditor.jsx';
 
 const fmtDay = (d) => d.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
 
@@ -101,7 +101,7 @@ function PlanSetup({ current, onCancel, onCreate }) {
 
 const STATUS_LABEL = { done: 'Done', missed: 'Missed', today: 'Today', upcoming: 'Planned', rest: 'Rest' };
 
-function WeekStrip({ days }) {
+export function WeekStrip({ days }) {
   return (
     <div className="week-strip">
       {days.map((d) => (
@@ -178,7 +178,7 @@ function HistorySummary({ history, target }) {
 
 // ---------- tab ----------
 
-export default function PlanTab({ onStart }) {
+export default function PlanTab({ onStart, onOpen }) {
   const { state, dispatch } = useStore();
   const { plan, history, workouts } = state;
   const [choosing, setChoosing] = useState(false);
@@ -252,7 +252,11 @@ export default function PlanTab({ onStart }) {
           <div className="muted tiny">NEXT UP · {schedule.nextUp.isToday ? 'today' : fmtDay(schedule.nextUp.date)}</div>
           <div className="row space-between gap">
             <div>
-              <div className="next-up-name">{nextWorkout ? nextWorkout.name : schedule.nextUp.slot.label}</div>
+              {nextWorkout ? (
+                <button className="link-btn next-up-name" onClick={() => onOpen(nextWorkout)}>{nextWorkout.name} ›</button>
+              ) : (
+                <div className="next-up-name">{schedule.nextUp.slot.label}</div>
+              )}
               <div className="muted small">
                 {nextWorkout
                   ? nextWorkout.exercises.map((wx) => exerciseById[wx.exerciseId]?.name).filter(Boolean).join(' · ')

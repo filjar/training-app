@@ -1,19 +1,11 @@
 import React, { useMemo, useState } from 'react';
 import { EXERCISES, exerciseById } from '../data/exercises.js';
-import { useStore, uid } from '../store.jsx';
-import { generateWorkout, suggestWeight, completedSetsByExercise, fmtWeight, workoutMuscles } from '../logic/stats.js';
+import { useStore } from '../store.jsx';
+import { generateWorkout, suggestWeight, completedSetsByExercise, fmtWeight } from '../logic/stats.js';
+import GoalSlider from './GoalSlider.jsx';
 import BodyModel from './BodyModel.jsx';
 
-function summarize(workout) {
-  return workout.exercises
-    .map((wx) => exerciseById[wx.exerciseId]?.name)
-    .filter(Boolean)
-    .join(' · ');
-}
-
-// ---------- editor ----------
-
-export function WorkoutEditor({ initial, onSave, onCancel }) {
+export default function WorkoutEditor({ initial, onSave, onCancel }) {
   const { state } = useStore();
   const [workout, setWorkout] = useState(() => JSON.parse(JSON.stringify(initial)));
   const [pickerMuscle, setPickerMuscle] = useState(null);
@@ -71,9 +63,9 @@ export function WorkoutEditor({ initial, onSave, onCancel }) {
     : [];
 
   return (
-    <div className="tab-page">
+    <div className="tab-page flow-page">
       <div className="editor-header">
-        <h1>{initial.exercises.length ? 'Edit workout' : 'New workout'}</h1>
+        <h1>Edit workout</h1>
         <div className="row gap">
           <button className="btn ghost" onClick={onCancel}>Cancel</button>
           <button
@@ -174,11 +166,7 @@ export function WorkoutEditor({ initial, onSave, onCancel }) {
               <div className="muted small center">
                 {genMuscles.length ? genMuscles.join(', ') : 'Tap the muscles you want to train.'}
               </div>
-              <div className="slider-row">
-                <span>Strength</span>
-                <input type="range" min="0" max="1" step="0.05" value={slider} onChange={(e) => setSlider(+e.target.value)} />
-                <span>Endurance</span>
-              </div>
+              <GoalSlider value={slider} onChange={setSlider} />
               <button className="btn primary full" disabled={genMuscles.length === 0} onClick={runGenerator}>
                 Generate workout
               </button>
@@ -186,59 +174,6 @@ export function WorkoutEditor({ initial, onSave, onCancel }) {
             </>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- list ----------
-
-export default function WorkoutsTab({ onStart }) {
-  const { state, dispatch } = useStore();
-  const [editing, setEditing] = useState(null); // workout object being edited
-
-  if (editing) {
-    return (
-      <WorkoutEditor
-        initial={editing}
-        onCancel={() => setEditing(null)}
-        onSave={(w) => {
-          dispatch({ type: 'saveWorkout', workout: w });
-          setEditing(null);
-        }}
-      />
-    );
-  }
-
-  return (
-    <div className="tab-page">
-      <div className="editor-header">
-        <h1>Workouts</h1>
-        <button className="btn primary" onClick={() => setEditing({ id: uid(), name: '', exercises: [] })}>
-          + New workout
-        </button>
-      </div>
-      {state.workouts.length === 0 && <div className="muted">No workouts yet. Create one!</div>}
-      <div className="card-grid">
-        {state.workouts.map((w) => (
-          <div key={w.id} className="card workout-card">
-            <div className="card-title">{w.name}</div>
-            <div className="muted small">{summarize(w)}</div>
-            <div className="muted tiny">{[...workoutMuscles(w)].join(', ')}</div>
-            <div className="row gap wrap" style={{ marginTop: 8 }}>
-              <button className="btn small primary" onClick={() => onStart(w)}>Start</button>
-              <button className="btn small" onClick={() => setEditing(JSON.parse(JSON.stringify(w)))}>Edit</button>
-              <button
-                className="btn small danger-ghost"
-                onClick={() => {
-                  if (confirm(`Delete workout "${w.name}"?`)) dispatch({ type: 'deleteWorkout', id: w.id });
-                }}
-              >
-                Delete
-              </button>
-            </div>
-          </div>
-        ))}
       </div>
     </div>
   );

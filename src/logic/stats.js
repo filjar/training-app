@@ -148,3 +148,26 @@ export function fmtTotal(kg) {
   if (kg >= 10000) return `${Math.round(kg / 1000)}t`;
   return `${Math.round(kg).toLocaleString()} kg`;
 }
+
+// Rough length of a workout in minutes: ~40 s of work per set plus its rest.
+export function estimateMinutes(workout) {
+  let sec = 0;
+  for (const wx of workout.exercises) sec += wx.sets.length * (40 + (wx.rest || 60));
+  return Math.max(5, Math.round(sec / 60 / 5) * 5);
+}
+
+// Rep PRs a session improved: [{ exerciseId, reps, weight }] for each "n reps"
+// target where the session's best beats everything in the earlier history.
+export function newPRs(session, earlierHistory, targets = [1, 2, 6, 10]) {
+  const before = completedSetsByExercise(earlierHistory);
+  const now = completedSetsByExercise([session]);
+  const out = [];
+  for (const [exerciseId, sets] of Object.entries(now)) {
+    const old = repPRs(before[exerciseId] || [], targets);
+    const fresh = repPRs(sets, targets);
+    for (const n of targets) {
+      if (fresh[n] && (!old[n] || fresh[n] > old[n])) out.push({ exerciseId, reps: n, weight: fresh[n] });
+    }
+  }
+  return out;
+}

@@ -33,7 +33,7 @@ export default defineConfig(({ command }) => ({
         name: 'Training',
         short_name: 'Training',
         description: 'Plan and track your workouts.',
-        theme_color: '#e0452f',
+        theme_color: '#0e8a84',
         background_color: '#f4f5f7',
         display: 'standalone',
         orientation: 'portrait',

@@ -47,7 +47,7 @@ function RestPanel({ restSec, open, onClose }) {
   );
 }
 
-export default function ActiveWorkout() {
+export default function ActiveWorkout({ onFinish }) {
   const { state, dispatch } = useStore();
   const active = state.active;
   const [restOpen, setRestOpen] = useState(false);
@@ -121,7 +121,7 @@ export default function ActiveWorkout() {
           >
             Cancel
           </button>
-          <button className="btn primary" onClick={() => dispatch({ type: 'finishWorkout' })}>Finish</button>
+          <button className="btn primary" onClick={onFinish}>Finish</button>
         </div>
       </div>
 

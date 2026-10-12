@@ -3,10 +3,15 @@
 // strength/endurance define the reps+sets ends of the generator slider.
 
 export const MUSCLE_GROUPS = [
-  'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps', 'Forearms',
+  'Chest', 'Shoulders', 'Traps', 'Biceps', 'Triceps',
   'Abs', 'Obliques', 'Lats', 'Lower Back',
   'Glutes', 'Quads', 'Hamstrings', 'Calves',
 ];
+
+// Sections of the exercise library. "Grip" holds forearm work: Forearms is not
+// a muscle group on the body (nearly every exercise uses them, so it filtered
+// nothing), and Grip exercises are only ever added by hand.
+export const LIBRARY_GROUPS = [...MUSCLE_GROUPS, 'Grip'];
 
 export const EXERCISES = [
   // Chest
@@ -64,7 +69,7 @@ export const EXERCISES = [
   // Traps
   {
     id: 'shrug', name: 'Dumbbell Shrug', group: 'Traps',
-    primary: ['Traps'], secondary: ['Forearms'],
+    primary: ['Traps'], secondary: [],
     instruction: 'Hold heavy dumbbells at your sides and shrug your shoulders straight up toward your ears, pause, and lower slowly.',
     defaultWeight: 20, strength: { reps: 8, sets: 4 }, endurance: { reps: 15, sets: 4 },
   },
@@ -78,19 +83,19 @@ export const EXERCISES = [
   // Biceps
   {
     id: 'biceps-curl', name: 'Biceps Curl', group: 'Biceps',
-    primary: ['Biceps'], secondary: ['Forearms'],
+    primary: ['Biceps'], secondary: [],
     instruction: 'With dumbbells or a barbell, curl the weight up while keeping elbows pinned to your sides. Lower under control.',
     defaultWeight: 10, strength: { reps: 6, sets: 4 }, endurance: { reps: 15, sets: 4 },
   },
   {
     id: 'hammer-curl', name: 'Hammer Curl', group: 'Biceps',
-    primary: ['Biceps'], secondary: ['Forearms'],
+    primary: ['Biceps'], secondary: [],
     instruction: 'Curl dumbbells with a neutral (thumbs-up) grip, keeping wrists straight and elbows close to the body.',
     defaultWeight: 10, strength: { reps: 6, sets: 4 }, endurance: { reps: 15, sets: 4 },
   },
   {
     id: 'chin-up', name: 'Chin-up', group: 'Biceps',
-    primary: ['Biceps', 'Lats'], secondary: ['Forearms', 'Abs'],
+    primary: ['Biceps', 'Lats'], secondary: ['Abs'],
     instruction: 'Hang from a bar with an underhand grip and pull your chin over the bar. Lower all the way down between reps.',
     defaultWeight: 0, strength: { reps: 5, sets: 4 }, endurance: { reps: 10, sets: 5 },
   },
@@ -115,16 +120,16 @@ export const EXERCISES = [
     defaultWeight: 0, strength: { reps: 6, sets: 4 }, endurance: { reps: 12, sets: 5 },
   },
 
-  // Forearms
+  // Grip
   {
-    id: 'wrist-curl', name: 'Wrist Curl', group: 'Forearms',
-    primary: ['Forearms'], secondary: [],
+    id: 'wrist-curl', name: 'Wrist Curl', group: 'Grip',
+    primary: [], secondary: [],
     instruction: 'Rest forearms on a bench with wrists hanging off the edge, curl a light bar up and down using only your wrists.',
     defaultWeight: 10, strength: { reps: 10, sets: 3 }, endurance: { reps: 20, sets: 4 },
   },
   {
-    id: 'farmers-carry', name: "Farmer's Carry", group: 'Forearms',
-    primary: ['Forearms', 'Traps'], secondary: ['Abs', 'Obliques'],
+    id: 'farmers-carry', name: "Farmer's Carry", group: 'Traps',
+    primary: ['Traps'], secondary: ['Abs', 'Obliques'],
     instruction: 'Pick up two heavy dumbbells and walk tall for 20–40 meters. One "rep" here means ~10 meters of walking.',
     defaultWeight: 24, strength: { reps: 4, sets: 4 }, endurance: { reps: 8, sets: 5 },
   },
@@ -144,7 +149,7 @@ export const EXERCISES = [
   },
   {
     id: 'hanging-leg-raise', name: 'Hanging Leg Raise', group: 'Abs',
-    primary: ['Abs'], secondary: ['Obliques', 'Forearms'],
+    primary: ['Abs'], secondary: ['Obliques'],
     instruction: 'Hanging from a bar, raise your legs (bent or straight) until thighs pass horizontal, then lower without swinging.',
     defaultWeight: 0, strength: { reps: 8, sets: 3 }, endurance: { reps: 15, sets: 4 },
   },
@@ -166,7 +171,7 @@ export const EXERCISES = [
   // Lats / back
   {
     id: 'pull-up', name: 'Pull-up', group: 'Lats',
-    primary: ['Lats'], secondary: ['Biceps', 'Forearms', 'Traps'],
+    primary: ['Lats'], secondary: ['Biceps', 'Traps'],
     instruction: 'Hang from a bar with an overhand grip slightly wider than shoulders and pull your chin over the bar.',
     defaultWeight: 0, strength: { reps: 5, sets: 4 }, endurance: { reps: 10, sets: 5 },
   },
@@ -192,7 +197,7 @@ export const EXERCISES = [
   // Lower back
   {
     id: 'deadlift', name: 'Deadlift', group: 'Lower Back',
-    primary: ['Lower Back', 'Glutes', 'Hamstrings'], secondary: ['Quads', 'Traps', 'Forearms'],
+    primary: ['Lower Back', 'Glutes', 'Hamstrings'], secondary: ['Quads', 'Traps'],
     instruction: 'With the bar over mid-foot, hinge down with a flat back, grip the bar and stand up by driving through your legs and hips.',
     defaultWeight: 60, strength: { reps: 3, sets: 5 }, endurance: { reps: 10, sets: 4 },
   },
@@ -252,7 +257,7 @@ export const EXERCISES = [
   // Hamstrings
   {
     id: 'romanian-deadlift', name: 'Romanian Deadlift', group: 'Hamstrings',
-    primary: ['Hamstrings', 'Glutes'], secondary: ['Lower Back', 'Forearms'],
+    primary: ['Hamstrings', 'Glutes'], secondary: ['Lower Back'],
     instruction: 'Holding the bar, push your hips back with soft knees until you feel a deep hamstring stretch, then drive hips forward to stand.',
     defaultWeight: 40, strength: { reps: 6, sets: 4 }, endurance: { reps: 12, sets: 4 },
   },
