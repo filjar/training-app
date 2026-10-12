@@ -1,6 +1,10 @@
 # Training app design document
 This document describes design elements of the new Training app.
 
+> This is the original brief. How the app is organised today, and the decisions made since
+> (for example: plans, teal for controls, Forearms removed as a muscle group), are in
+> [Design-navigation.md](Design-navigation.md). Open work is in [TODO.md](TODO.md).
+
 ## Sync with laptop
 The app must be able to sync data between devices and work on Iphone, Android, mac and windows. A person might want to make more involved configurations on a laptop and then use the app on the phone while working out. The UI might be more advanced in laptop-mode due to screen space and capabilities of the device. A persons data must be eailsy transferable between their devices without a hosted server where data is saved.
 
